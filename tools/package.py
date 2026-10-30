@@ -3,6 +3,7 @@ import argparse
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 import shutil
+from version import project_version
 
 root = Path(__file__).resolve().parents[1] / "dist"
 parser = argparse.ArgumentParser()
@@ -39,12 +40,17 @@ files = [
 ]
 variant = "debug" if debug else "session-trace" if session_trace else "release"
 binary = (root / "seplugins/pspgobt/pspgobt_probe.prx").read_bytes()
+version = project_version()
+major, minor = (int(part) for part in version.split("."))
+module = binary.find(b"PSPGoBT_Probe\0")
+if module < 2 or binary[module - 2:module] != bytes([minor, major]):
+    raise SystemExit("Refusing to package: PRX module version does not match src/plugin.c")
 for marker in (b"probe.log", b".text.bin"):
     if (marker in binary) != bool(debug):
         raise SystemExit(f"Refusing to package: PRX diagnostics do not match {variant} profile")
 if (b"session.log" in binary) != bool(session_trace):
     raise SystemExit("Refusing to package: session trace profile mismatch")
-release = root / f"pspgobt-{variant}-v0.28.zip"
+release = root / f"pspgobt-{variant}-v{version}.zip"
 with ZipFile(release, "w", compression=ZIP_DEFLATED) as archive:
     for name in files:
         archive.write(root / name, name)

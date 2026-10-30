@@ -1,0 +1,132 @@
+name: Build and release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    name: Test and build release PRX
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    env:
+      PSPGOBT_DEBUG: '0'
+      PSPGOBT_SESSION_TRACE: '0'
+      PSPDEV_RELEASE: v20261001
+      PSPDEV_SHA256: a86efe624e770005290919617859e9df24bd8fcd3e364f4587f23ec7364b0acd
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Check release version
+        id: version
+        shell: bash
+        run: |
+          version="$(python3 tools/version.py)"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            python3 tools/version.py --tag "$GITHUB_REF_NAME"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install toolchain dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y build-essential libgmp10 libmpfr6 libmpc3 libusb-1.0-0 libreadline8t64 libarchive13t64 libcurl4t64 libgpgme11t64
+          python3 -m pip install 'unicorn==2.1.4'
+
+      - name: Install pinned PSP toolchain
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/pspdev.tar.gz"
+          curl --fail --location --retry 3 --silent --show-error \
+            "https://github.com/pspdev/pspdev/releases/download/$PSPDEV_RELEASE/pspdev-ubuntu-latest-x86_64.tar.gz" \
+            --output "$archive"
+          echo "$PSPDEV_SHA256  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "PSPDEV=$RUNNER_TEMP/pspdev" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/pspdev/bin" >> "$GITHUB_PATH"
+
+      - name: Check SDK and CFW import library
+        shell: bash
+        run: |
+          psp-gcc --version
+          test -f "$(psp-config --pspsdk-path)/lib/libpspsystemctrl_kernel.a"
+
+      # Sony firmware captures are intentionally absent from the repository.
+      # Capture-dependent cases skip; portable and mocked MIPS cases still run.
+      - name: Host protocol checks
+        run: make test
+
+      - name: MIPS routing checks
+        run: make test-mips
+
+      - name: Build and test quiet release
+        run: make test-bridge-mips
+
+      - name: Package release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          make package
+          mkdir -p release-assets
+          cp "dist/pspgobt-release-v$VERSION.zip" pspgobt_probe.prx release-assets/
+          cd release-assets
+          sha256sum "pspgobt-release-v$VERSION.zip" pspgobt_probe.prx > SHA256SUMS
+
+      - name: Upload tested release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pspgobt-release-v${{ steps.version.outputs.version }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pspgobt-release-v${{ needs.build.outputs.version }}
+          path: release-assets
+
+      - name: Verify downloaded assets
+        working-directory: release-assets
+        run: sha256sum --check --strict SHA256SUMS
+
+      - name: Create release or update its assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --verify-tag --title "PSPGoBT $RELEASE_TAG" --generate-notes
+          fi

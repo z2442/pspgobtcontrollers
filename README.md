@@ -191,6 +191,35 @@ analysis. The v0.22 native manager-state changes remain unverified on physical h
 
 ## Build
 
+### GitHub Actions and releases
+
+[Build and release](.github/workflows/release.yml) runs the host checks,
+available MIPS tests, and a quiet release build on pushes and pull requests.
+You can also run it from **Actions → Build and release → Run workflow** to
+download a build artifact without publishing a release.
+
+To publish the current version, commit and push the workflow and source, then:
+
+```sh
+git tag -a v0.28 -m "PSPGoBT v0.28"
+git push origin v0.28
+```
+
+A successful tag build creates a GitHub Release with the installable ZIP,
+the standalone `pspgobt_probe.prx`, and `SHA256SUMS`. The tag must exactly match
+the version in `PSP_MODULE_INFO` in `src/plugin.c`; package names are derived
+from that declaration. Future releases need that version updated before
+tagging. CI explicitly disables debug logging and session tracing.
+
+The workflow uses a pinned PSPDEV release with a SHA-256 check and the
+repository's automatic `GITHUB_TOKEN`; no personal access token is needed.
+Only the publication job has `contents: write`. Re-running a tag build updates
+that release's assets while preserving its notes (immutable releases reject
+replacement). Local Sony firmware captures are not uploaded or required;
+capture-dependent tests skip when those files are absent.
+
+### Local build
+
 Install a current [PSPSDK](https://github.com/pspdev/pspsdk) with
 `psp-config`, `psp-gcc`, and the `pspsystemctrl_kernel` import library on PATH.
 There are no downloaded dependencies or proprietary firmware files in this
