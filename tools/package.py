@@ -12,7 +12,7 @@ parser.add_argument("--session-trace", type=int, choices=(0, 1), default=0)
 args = parser.parse_args()
 debug, session_trace = args.debug, args.session_trace
 files = [
-    "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/research.md", "docs/capture-analysis.md",
+    "README.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "docs/research.md", "docs/capture-analysis.md",
     "docs/capture-v02-analysis.md",
     "docs/capture-v03-analysis.md",
     "docs/capture-v04-analysis.md",

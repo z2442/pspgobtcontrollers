@@ -87,7 +87,8 @@ void gobt_session_trace_start(unsigned firmware)
     trace_thread = sceKernelCreateThread("PSPGoBTSessionTrace", trace_writer, 0x30, 0x1800, 0, NULL);
     if (trace_thread < 0) return;
     trace_enabled = 1;
-    gobt_session_trace(GOBT_TRACE_BOOT, 0, 28, firmware, 0);
+    /* Packed major/minor; older 0.x traces used the same low minor field. */
+    gobt_session_trace(GOBT_TRACE_BOOT, 0, 0x00010000, firmware, 0);
     if (sceKernelStartThread(trace_thread, 0, NULL) < 0) {
         trace_enabled = 0;
         sceKernelDeleteThread(trace_thread);

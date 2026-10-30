@@ -87,8 +87,9 @@ jobs:
           make package
           mkdir -p release-assets
           cp "dist/pspgobt-release-v$VERSION.zip" pspgobt_probe.prx release-assets/
+          cp CHANGELOG.md release-assets/RELEASE_NOTES.md
           cd release-assets
-          sha256sum "pspgobt-release-v$VERSION.zip" pspgobt_probe.prx > SHA256SUMS
+          sha256sum "pspgobt-release-v$VERSION.zip" pspgobt_probe.prx RELEASE_NOTES.md > SHA256SUMS
 
       - name: Upload tested release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -128,5 +129,6 @@ jobs:
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
           else
             gh release create "$RELEASE_TAG" release-assets/* \
-              --verify-tag --title "PSPGoBT $RELEASE_TAG" --generate-notes
+              --verify-tag --title "PSPGoBT $RELEASE_TAG" \
+              --notes-file release-assets/RELEASE_NOTES.md
           fi

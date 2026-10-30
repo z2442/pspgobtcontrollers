@@ -17,7 +17,7 @@ def project_version():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", help="Require this tag to match the PRX version (e.g. v0.28)")
+    parser.add_argument("--tag", help="Require this tag to match the PRX version (e.g. v1.0)")
     args = parser.parse_args()
     version = project_version()
     if args.tag is not None and args.tag != f"v{version}":

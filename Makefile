@@ -87,6 +87,7 @@ package: all
 	cp pspgobt_probe.prx dist/seplugins/pspgobt/
 	cp packaging/PLUGINS.TXT.example dist/seplugins/pspgobt/
 	cp README.md dist/
+	cp CHANGELOG.md dist/
 	cp LICENSE THIRD_PARTY_NOTICES.md dist/
 	mkdir -p dist/docs
 	cp docs/research.md dist/docs/

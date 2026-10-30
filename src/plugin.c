@@ -21,7 +21,7 @@
 
 /* Resident: another plugin may chain our callback. Disable and reboot to
  * remove it; do not tear down a callback that may still be referenced. */
-PSP_MODULE_INFO("PSPGoBT_Probe", 0x1001, 0, 28);
+PSP_MODULE_INFO("PSPGoBT_Probe", 0x1001, 1, 0);
 PSP_MAIN_THREAD_ATTR(0);
 
 #define ROOT "ef0:/seplugins/pspgobt"
@@ -212,7 +212,7 @@ int module_start(SceSize args, void *argp)
 #if PSPGOBT_DEBUG
     sceIoMkdir("ef0:/seplugins", 0777);
     sceIoMkdir(ROOT, 0777);
-    log_line("\nPSPGoBT development probe 0.28 firmware=%08lX model=%d\n",
+    log_line("\nPSPGoBT development probe 1.0 firmware=%08lX model=%d\n",
              firmware, sceKernelGetModel());
     log_line("Bluetooth pairing enabled. Input bridge selects connected DualSense records and validates reports.\n");
     log_line("Device-info tracing observes original results; no registration status is overridden.\n");
