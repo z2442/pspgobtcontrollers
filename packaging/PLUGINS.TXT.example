@@ -1,0 +1,4 @@
+# Add this line to ef0:/seplugins/PLUGINS.TXT on ARK-5.
+# If an older vsh-only entry exists for this PRX, replace that entry.
+# Do not replace an existing plugin configuration file.
+always, ef0:/seplugins/pspgobt/pspgobt_probe.prx, on

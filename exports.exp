@@ -1,0 +1,24 @@
+PSP_BEGIN_EXPORTS
+PSP_EXPORT_START(syslib, 0, 0x8000)
+PSP_EXPORT_FUNC(module_start)
+PSP_EXPORT_FUNC(module_stop)
+PSP_EXPORT_FUNC(module_reboot_before)
+PSP_EXPORT_FUNC(module_reboot_phase)
+PSP_EXPORT_VAR(module_info)
+PSP_EXPORT_END
+PSP_EXPORT_START(PSPGoBT_driver, 0, 0x0001)
+PSP_EXPORT_FUNC(pspgobtSubmitReport)
+PSP_EXPORT_FUNC(pspgobtDisconnect)
+PSP_EXPORT_END
+PSP_EXPORT_START(PSPGoBT_trace, 0, 0x4001)
+PSP_EXPORT_FUNC(pspgobtTraceDeviceInfo)
+PSP_EXPORT_FUNC(pspgobtTraceRegisterScan)
+PSP_EXPORT_FUNC(pspgobtTraceRegisterAddress)
+PSP_EXPORT_FUNC(pspgobtTraceConnect)
+PSP_EXPORT_FUNC(pspgobtTraceDisconnect)
+PSP_EXPORT_FUNC(pspgobtTraceIdentity)
+PSP_EXPORT_FUNC(pspgobtRouteHid)
+PSP_EXPORT_FUNC(pspgobtRouteStoredHid)
+PSP_EXPORT_FUNC(pspgobtPairFallback)
+PSP_EXPORT_END
+PSP_END_EXPORTS

@@ -1,0 +1,13 @@
+/build/
+/dist/
+*.o
+*.d
+*.elf
+*.prx
+*.map
+*.PBP
+*.SFO
+*.bin
+exports.c
+__pycache__/
+/pspgobt/
