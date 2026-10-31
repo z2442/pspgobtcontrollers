@@ -95,6 +95,17 @@ int ds_parse_bt_simple(const uint8_t *report, size_t size, DsState *state)
     return decode_controls(report + 1, report[8], report[9], report[5], report[6], report[7], state);
 }
 
+int ds4_parse_bt(const uint8_t *report, size_t size, DsState *state)
+{
+    if (!report || !state || size != DS4_BT_REPORT_SIZE || report[0] != 0x11)
+        return -1;
+    if (ds_crc32(0xa1, report, size - 4) != get_le32(report + size - 4))
+        return -2;
+    /* The two BT header bytes precede the USB-style axes and buttons. */
+    return decode_controls(report + 3, report[10], report[11],
+                           report[7], report[8], report[9], state);
+}
+
 void ds_to_ds3(const DsState *state, uint8_t report[DS3_REPORT_SIZE])
 {
     static const uint8_t pressure_bits[12] = {
@@ -124,5 +135,15 @@ void ds_build_enable(uint8_t report[DS_BT_REPORT_SIZE], uint8_t sequence)
     report[2] = 0x10; /* Bluetooth output tag. */
     report[4] = 0x04; /* Lightbar control valid. */
     report[49] = 0x40; /* Dim blue; motors and adaptive triggers disabled. */
+    put_le32(report + 74, ds_crc32(0xa2, report, 74));
+}
+
+void ds4_build_enable(uint8_t report[DS4_BT_REPORT_SIZE])
+{
+    memset(report, 0, DS4_BT_REPORT_SIZE);
+    report[0] = 0x11;
+    report[1] = 0xc4; /* HID, CRC and 4 ms Bluetooth polling. */
+    report[3] = 0x02; /* Lightbar update valid; motors remain off. */
+    report[10] = 0x40; /* Dim blue. */
     put_le32(report + 74, ds_crc32(0xa2, report, 74));
 }

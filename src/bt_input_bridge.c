@@ -67,6 +67,7 @@ static uint64_t setup_retry_after[9];
 static uint64_t stream_started[2], last_report[2];
 static unsigned recover_devices, stream_recoveries[9];
 static unsigned prepared_devices, discovery_events;
+static unsigned device_models[9];
 static unsigned discovery_bypassed[2], reads_ready[2], wide_active[2];
 static unsigned resetting[2];
 static unsigned disconnect_requests, closing_devices, pending_closures;
@@ -337,9 +338,16 @@ static int classify(unsigned device, void *info, int *query, int *cached)
     interrupts = sceKernelCpuSuspendIntr();
     if (has_address) *cached = gobt_target_contains(&target_cache, address);
     sceKernelCpuResumeIntr(interrupts);
-    if (*cached) { *query = 0; return 1; }
+    if (*cached) {
+        /* The local 0x63 record avoids a remote DID query on reconnect. */
+        *query = record_command ? cached_info(device, info) : -1;
+        device_models[device] = *query >= 0 && gobt_input_metadata(info, 80) ?
+                                gobt_controller_model(info, 80, 80) : GOBT_MODEL_NONE;
+        return 1;
+    }
     *query = get_info(device, info);
     selected = *query >= 0 && gobt_input_metadata(info, 80);
+    device_models[device] = selected ? gobt_controller_model(info, 80, 80) : GOBT_MODEL_NONE;
     if (selected && has_address) {
         uint8_t current[6];
         if (!slot_address(device, current) || memcmp(address, current, 6)) return 0;
@@ -578,7 +586,7 @@ static int trace_native_identity(unsigned device, void *vendor, void *product, v
          * Public DID APIs and all other devices retain their original calls. */
         *(u16 *)vendor = 0;
         *(u16 *)product = 0;
-        if (event) gobt_log("bt-input native DID skipped device=%u source=%u event=%u; prepared DualSense, IDs unknown\n",
+        if (event) gobt_log("bt-input native DID skipped device=%u source=%u event=%u; prepared Sony controller, IDs unknown\n",
                             device, i, event);
         pspSdkSetK1(k1);
         return -1;
@@ -972,7 +980,8 @@ static void initialize(unsigned index, unsigned device, InputSource *source)
     unsigned channel = *(const u32 *)contexts[index];
     unsigned timeout = 200000;
     int result;
-    if (source->initialized || !source->accepted || !reads_ready[index] || suspended || quiescing || session_closing(device) ||
+    if (source->initialized || !source->accepted || !device_models[device] ||
+        !reads_ready[index] || suspended || quiescing || session_closing(device) ||
         source->attempts >= 3 || (uint64_t)sceKernelGetSystemTimeWide() < source->retry_after ||
         channel < 1 || channel > 4 || ((const u16 *)contexts[index])[2] != device ||
         !(connection_flags(device) & 2)) return;
@@ -980,7 +989,8 @@ static void initialize(unsigned index, unsigned device, InputSource *source)
     ++source->attempts;
     memset(output, 0, sizeof(output));
     output[0] = 0xa2;
-    ds_build_enable(output + 1, 0);
+    if (device_models[device] == GOBT_MODEL_DUALSHOCK4) ds4_build_enable(output + 1);
+    else ds_build_enable(output + 1, 0);
     gobt_session_trace(GOBT_TRACE_INIT, device, index, generation, source->attempts);
     result = write_hid(channel, output, 79, &timeout);
     gobt_session_trace(GOBT_TRACE_INIT_DONE, device, (unsigned)result, generation, generations[index]);
@@ -1259,6 +1269,12 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
             source->assembly_started = packet->received;
         int result = gobt_decode_hidp(&source->assembly, packet->bytes, packet->size, &state);
         if (result == 1) {
+            if (!device_models[packet->device]) {
+                unsigned report_id = packet->bytes[0] == 0xa1 && packet->size >= 2 ?
+                                     packet->bytes[1] : source->assembly.report[0];
+                if (report_id == 0x11) device_models[packet->device] = GOBT_MODEL_DUALSHOCK4;
+                else if (report_id == 0x31) device_models[packet->device] = GOBT_MODEL_DUALSENSE;
+            }
             if (packet->generation != generations[packet->source] || suspended ||
                 sceKernelGetSystemTimeWide() - packet->received >= GOBT_INPUT_TIMEOUT_US) return;
             interrupts = sceKernelCpuSuspendIntr();

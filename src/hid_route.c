@@ -1,4 +1,5 @@
 #include "hid_route.h"
+#include "report_bridge.h"
 #include <string.h>
 
 static uint16_t le16(const uint8_t *p)
@@ -15,19 +16,13 @@ static uint32_t le32(const uint8_t *p)
 int gobt_route_hid_record(uint8_t *profile, size_t profile_size,
                          const uint8_t *info, size_t info_size)
 {
-    static const char prefix[] = "DualSense";
-    unsigned i;
     uint32_t kind;
-    uint16_t next;
     if (!profile || !info || profile_size < GOBT_PROFILE_BYTES ||
         info_size < GOBT_DEVICE_INFO_BYTES) return 0;
     kind = le32(profile + 4);
     if (le32(info) != GOBT_DEVICE_INFO_BYTES || kind > GOBT_PROFILE_GENERIC_HID ||
-        le16(info + 0x48) != 0x0402) return 0;
-    for (i = 0; i < sizeof(prefix) - 1; ++i)
-        if (le16(info + 6 + i * 2) != (uint8_t)prefix[i]) return 0;
-    next = le16(info + 6 + (sizeof(prefix) - 1) * 2);
-    if (next != 0 && next != ' ') return 0;
+        le16(info + 0x48) != 0x0402 ||
+        gobt_controller_model(info, info_size, GOBT_DEVICE_INFO_BYTES) == GOBT_MODEL_NONE) return 0;
     /* This mode is outside Sony's 0..8 enum. Its label and transport methods
      * are handled explicitly, including saved-device construction. */
     profile[4] = GOBT_PROFILE_GENERIC_HID;

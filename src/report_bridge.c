@@ -7,21 +7,33 @@ static uint32_t le32(const uint8_t *p)
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+int gobt_controller_model(const uint8_t *info, size_t size, uint32_t record_size)
+{
+    static const char sense[] = "DualSense";
+    static const char shock[] = "Wireless Controller";
+    unsigned i;
+    if (!info || size < record_size || le32(info) != record_size) return GOBT_MODEL_NONE;
+    for (i = 0; i < sizeof(sense) - 1; ++i)
+        if (info[6 + 2 * i] != (uint8_t)sense[i] || info[7 + 2 * i]) break;
+    if (i == sizeof(sense) - 1 && !info[25] && (!info[24] || info[24] == ' '))
+        return GOBT_MODEL_DUALSENSE;
+    for (i = 0; i < sizeof(shock) - 1; ++i)
+        if (info[6 + 2 * i] != (uint8_t)shock[i] || info[7 + 2 * i]) return GOBT_MODEL_NONE;
+    return !info[6 + 2 * i] && !info[7 + 2 * i] ? GOBT_MODEL_DUALSHOCK4 : GOBT_MODEL_NONE;
+}
+
 int gobt_input_metadata(const uint8_t *info, size_t size)
 {
-    static const char prefix[] = "DualSense";
-    unsigned i;
-    if (!info || size < 80 || le32(info) != 80 || info[72] != 2 || info[73] != 4)
-        return 0;
-    for (i = 0; i < sizeof(prefix) - 1; ++i)
-        if (info[6 + 2 * i] != (uint8_t)prefix[i] || info[7 + 2 * i]) return 0;
-    return !info[25] && (!info[24] || info[24] == ' ');
+    return info && size >= 80 && info[72] == 2 && info[73] == 4 &&
+           gobt_controller_model(info, size, 80) != GOBT_MODEL_NONE;
 }
 
 int gobt_input_identity(const uint8_t *info, size_t size, unsigned vendor, unsigned product)
 {
-    return vendor == 0x054c && (product == 0x0ce6 || product == 0x0df2) &&
-           gobt_input_metadata(info, size);
+    int model = gobt_input_metadata(info, size) ? gobt_controller_model(info, size, 80) : GOBT_MODEL_NONE;
+    return vendor == 0x054c &&
+           ((model == GOBT_MODEL_DUALSENSE && (product == 0x0ce6 || product == 0x0df2)) ||
+            (model == GOBT_MODEL_DUALSHOCK4 && (product == 0x05c4 || product == 0x09cc)));
 }
 
 int gobt_input_identity_policy(const uint8_t *info, size_t size, uint32_t identity_result,
@@ -44,18 +56,20 @@ int gobt_decode_hidp(GoBtReportAssembly *assembly, const uint8_t *packet,
     if (assembly->used == 63 && size == 15) {
         memcpy(assembly->report + 63, packet, 15);
         assembly->used = 0;
-        result = ds_parse_bt(assembly->report, DS_BT_REPORT_SIZE, state);
+        result = assembly->report[0] == 0x11 ? ds4_parse_bt(assembly->report, DS4_BT_REPORT_SIZE, state) :
+                 ds_parse_bt(assembly->report, DS_BT_REPORT_SIZE, state);
         return result == 0 ? 1 : result;
     }
     if (packet[0] == 0xa1) {
         assembly->used = 0;
         if (packet[1] == 1) return ds_parse_bt_simple(packet + 1, size - 1, state) ? -1 : 1;
-        if (packet[1] != 0x31) return -1;
+        if (packet[1] != 0x31 && packet[1] != 0x11) return -1;
         /* The wide receive path normally supplies a complete report. Parse
          * that immutable queued frame directly; assembly is only for actual
          * fragments, avoiding an extra 78-byte copy on every input report. */
         if (size == DS_BT_REPORT_SIZE + 1) {
-            result = ds_parse_bt(packet + 1, DS_BT_REPORT_SIZE, state);
+            result = packet[1] == 0x11 ? ds4_parse_bt(packet + 1, DS4_BT_REPORT_SIZE, state) :
+                     ds_parse_bt(packet + 1, DS_BT_REPORT_SIZE, state);
             return result == 0 ? 1 : result;
         }
     } else if (packet[0] != 0xb1 || !assembly->used) {
@@ -70,7 +84,8 @@ int gobt_decode_hidp(GoBtReportAssembly *assembly, const uint8_t *packet,
     assembly->used += (unsigned)size - 1;
     if (assembly->used < DS_BT_REPORT_SIZE) return 0;
     assembly->used = 0;
-    result = ds_parse_bt(assembly->report, DS_BT_REPORT_SIZE, state);
+    result = assembly->report[0] == 0x11 ? ds4_parse_bt(assembly->report, DS4_BT_REPORT_SIZE, state) :
+             ds_parse_bt(assembly->report, DS_BT_REPORT_SIZE, state);
     return result == 0 ? 1 : result;
 }
 

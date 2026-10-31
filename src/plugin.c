@@ -214,10 +214,10 @@ int module_start(SceSize args, void *argp)
     sceIoMkdir(ROOT, 0777);
     log_line("\nPSPGoBT development probe 1.0 firmware=%08lX model=%d\n",
              firmware, sceKernelGetModel());
-    log_line("Bluetooth pairing enabled. Input bridge selects connected DualSense records and validates reports.\n");
+    log_line("Bluetooth pairing enabled. Input bridge selects supported Sony controllers and validates reports.\n");
     log_line("Device-info tracing observes original results; no registration status is overridden.\n");
-    log_line("Guarded DualSense XMB HID routing patch enabled; native input transport is still under test.\n");
-    log_line("Guarded DualSense full-record registration enabled; Bluetooth pairing remains experimental.\n");
+    log_line("Guarded Sony controller XMB HID routing patch enabled; native input transport is still under test.\n");
+    log_line("Guarded Sony controller full-record registration enabled; Bluetooth pairing remains experimental.\n");
 #endif
     fd = sceIoOpen(ROOT "/enable-filter", PSP_O_RDONLY, 0);
     enable_filter = fd >= 0;

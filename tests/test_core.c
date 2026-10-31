@@ -10,11 +10,73 @@
 #include <stdio.h>
 #include <string.h>
 
+static void put_word(uint8_t *image, size_t offset, uint32_t word);
+
 static void sign_input(uint8_t *report)
 {
     uint32_t crc = ds_crc32(0xa1, report, 74);
     unsigned i;
     for (i = 0; i < 4; ++i) report[74 + i] = (uint8_t)(crc >> (8 * i));
+}
+
+static void set_name(uint8_t *record, const char *name)
+{
+    unsigned i;
+    memset(record + 6, 0, 64);
+    for (i = 0; name[i]; ++i) record[6 + 2 * i] = (uint8_t)name[i];
+}
+
+static void test_dualshock4(void)
+{
+    uint8_t report[78] = {0}, output[78], packet[79], info[80] = {0}, scan[84] = {0};
+    GoBtReportAssembly assembly = {{0}, 0};
+    DsState state, before;
+    uint32_t crc;
+    unsigned i;
+    report[0] = 0x11;
+    report[3] = 10; report[4] = 20; report[5] = 30; report[6] = 40;
+    report[7] = 0xf1; report[8] = 0xff; report[9] = 1;
+    report[10] = 90; report[11] = 180;
+    crc = ds_crc32(0xa1, report, 74);
+    for (i = 0; i < 4; ++i) report[74 + i] = (uint8_t)(crc >> (8 * i));
+    ds_neutral(&state);
+    assert(ds4_parse_bt(report, 78, &state) == 0);
+    assert(state.lx == 10 && state.ly == 20 && state.rx == 30 && state.ry == 40);
+    assert(state.l2 == 90 && state.r2 == 180 && state.buttons == 0x1ff3f);
+    before = state;
+    report[10] ^= 1;
+    assert(ds4_parse_bt(report, 78, &state) == -2 && !memcmp(&state, &before, sizeof(state)));
+    report[10] ^= 1;
+    report[7] = 15;
+    crc = ds_crc32(0xa1, report, 74);
+    for (i = 0; i < 4; ++i) report[74 + i] = (uint8_t)(crc >> (8 * i));
+    assert(ds4_parse_bt(report, 78, &state) == -3 && !memcmp(&state, &before, sizeof(state)));
+    report[7] = 0xf1;
+    crc = ds_crc32(0xa1, report, 74);
+    for (i = 0; i < 4; ++i) report[74 + i] = (uint8_t)(crc >> (8 * i));
+    packet[0] = 0xa1; memcpy(packet + 1, report, 78);
+    assert(gobt_decode_hidp(&assembly, packet, 79, &state) == 1);
+    assert(gobt_decode_hidp(&assembly, packet, 64, &state) == 0);
+    assert(gobt_decode_hidp(&assembly, report + 63, 15, &state) == 1);
+    ds4_build_enable(output);
+    assert(output[0] == 0x11 && output[1] == 0xc4 && output[3] == 2 && output[10] == 0x40);
+    crc = ds_crc32(0xa2, output, 74);
+    for (i = 0; i < 4; ++i) assert(output[74 + i] == (uint8_t)(crc >> (8 * i)));
+    put_word(info, 0, 80);
+    set_name(info, "Wireless Controller");
+    info[72] = 2; info[73] = 4;
+    assert(gobt_controller_model(info, 80, 80) == GOBT_MODEL_DUALSHOCK4);
+    assert(gobt_input_metadata(info, 80));
+    assert(gobt_input_identity(info, 80, 0x054c, 0x05c4));
+    assert(gobt_input_identity(info, 80, 0x054c, 0x09cc));
+    assert(!gobt_input_identity(info, 80, 0x054c, 0x0ce6));
+    put_word(scan, 0, 84);
+    set_name(scan, "Wireless Controller");
+    assert(gobt_pair_scan_record(scan, 84));
+    info[6 + 2 * 19] = 'X';
+    assert(!gobt_input_metadata(info, 80));
+    scan[6 + 2 * 19] = 'X';
+    assert(!gobt_pair_scan_record(scan, 84));
 }
 
 static void test_protocol(void)
@@ -266,6 +328,11 @@ static void test_hid_routing(void)
         assert(profile[i] == (i == 4 ? 9 : i > 4 && i < 8 ? 0 : saved[i]));
     assert(!memcmp(info, original_info, sizeof(info)));
     assert(gobt_route_hid_record(profile, 44, info, 80) == 1); /* Reattach methods for the custom mode. */
+    set_name(info, "Wireless Controller");
+    memcpy(profile, saved, sizeof(profile));
+    assert(gobt_route_hid_record(profile, 44, info, 80) == 1);
+    assert(profile[4] == GOBT_PROFILE_GENERIC_HID);
+    set_name(info, name);
     memcpy(profile, saved, sizeof(profile));
     assert(!gobt_route_hid_record(profile, 43, info, 80));
     assert(!gobt_route_hid_record(profile, 44, info, 79));
@@ -836,6 +903,7 @@ static void test_target_cache(void)
 
 int main(void)
 {
+    test_dualshock4();
     test_target_cache();
     test_hid_reset_guard();
     test_cached_record_guard();

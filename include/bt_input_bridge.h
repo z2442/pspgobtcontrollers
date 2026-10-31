@@ -12,7 +12,7 @@ void gobt_input_bridge_connected(unsigned device);
 unsigned gobt_input_bridge_disconnecting(unsigned device);
 void gobt_input_bridge_disconnect_result(unsigned device, unsigned token, int result);
 int gobt_input_bridge_connect_ready(unsigned device);
-/* Returns 1 for DualSense metadata, 0 for another stored device, or a
+/* Returns 1 for supported controller metadata, 0 for another stored device, or a
  * negative result when the record is not currently available. */
 int gobt_input_bridge_prepare(unsigned device);
 /* Passive selection for saved XMB objects if their metadata query fails. */

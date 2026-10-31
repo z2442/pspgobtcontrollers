@@ -23,13 +23,17 @@ typedef struct {
     unsigned used;
 } GoBtReportAssembly;
 
+enum { GOBT_MODEL_NONE, GOBT_MODEL_DUALSENSE, GOBT_MODEL_DUALSHOCK4 };
+/* Exact Sony Bluetooth names in the PSP's UTF-16 device records. */
+int gobt_controller_model(const uint8_t *info, size_t size, uint32_t record_size);
+
 /* HIDP DATA input (A1) and explicit DATC input (B1), exact bounded frames. */
 int gobt_decode_hidp(GoBtReportAssembly *assembly, const uint8_t *packet,
                      size_t size, DsState *state);
 int gobt_input_identity(const uint8_t *info, size_t size, unsigned vendor, unsigned product);
 int gobt_input_metadata(const uint8_t *info, size_t size);
 /* Returns 1 for matching numeric identity, 2 for the observed DID-query
- * failure on a connected, named DualSense, or 0 to refuse the source. */
+ * failure on a connected, named supported controller, or 0 to refuse it. */
 int gobt_input_identity_policy(const uint8_t *info, size_t size, uint32_t identity_result,
                                 unsigned vendor, unsigned product, unsigned link_flags);
 int gobt_report_bridge_supported(uint32_t firmware, const uint8_t *text,

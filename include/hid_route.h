@@ -17,7 +17,7 @@
 #define GOBT_LABEL_ENTRY_OFFSET 0x146c4u
 #define GOBT_STORE_ENTRY_OFFSET 0x14d34u
 
-/* Selects the observed DualSense record and sets its generic HID device type.
+/* Selects an observed supported Sony controller and sets generic HID type.
  * Returns 1 even when already in the custom mode: fresh objects need methods.
  * The display name is a routing guard, not authentication. */
 int gobt_route_hid_record(uint8_t *profile, size_t profile_size,

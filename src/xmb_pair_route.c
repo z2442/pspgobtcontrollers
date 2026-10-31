@@ -56,7 +56,7 @@ int pspgobtPairFallback(const void *object, const void *address)
         return SCE_KERNEL_ERROR_NO_MEMORY;
     }
     gobt_pair_default_parameter(parameter, GOBT_PAIR_PARAMETER_BYTES);
-    gobt_log("bt-pair-route target=DualSense record84=1 parameter=xmb-default class=%02X%02X%02X; using native full-record registration\n",
+    gobt_log("bt-pair-route target=Sony-controller record84=1 parameter=xmb-default class=%02X%02X%02X; using native full-record registration\n",
              record[74], record[73], record[72]);
     pspSdkSetK1(k1);
     result = pspgobtTraceRegisterScan(record, parameter);
@@ -86,7 +86,7 @@ int gobt_install_pair_route(SceModule *module, unsigned long firmware)
     sceKernelCpuResumeIntr(interrupts);
     sceKernelDcacheWritebackInvalidateAll();
     sceKernelIcacheInvalidateAll();
-    gobt_log("bt-pair-route installed site=%08lX stub=%08lX; guarded DualSense full-record registration enabled\n",
+    gobt_log("bt-pair-route installed site=%08lX stub=%08lX; guarded Sony controller full-record registration enabled\n",
              site, replacement);
     return 0;
 }

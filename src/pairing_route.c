@@ -1,4 +1,5 @@
 #include "pairing_route.h"
+#include "report_bridge.h"
 #include <string.h>
 
 static uint32_t le32(const uint8_t *p)
@@ -9,13 +10,9 @@ static uint32_t le32(const uint8_t *p)
 
 int gobt_pair_scan_record(const uint8_t *record, size_t size)
 {
-    static const char prefix[] = "DualSense";
-    unsigned i;
     if (!record || size < GOBT_SCAN_RECORD_BYTES ||
         le32(record) != GOBT_SCAN_RECORD_BYTES) return 0;
-    for (i = 0; i < sizeof(prefix) - 1; ++i)
-        if (record[6 + 2 * i] != (uint8_t)prefix[i] || record[7 + 2 * i]) return 0;
-    return !record[25] && (!record[24] || record[24] == ' ');
+    return gobt_controller_model(record, size, GOBT_SCAN_RECORD_BYTES) != GOBT_MODEL_NONE;
 }
 
 int gobt_pair_default_parameter(uint8_t *parameter, size_t size)
