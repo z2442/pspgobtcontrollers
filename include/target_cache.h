@@ -7,10 +7,13 @@
 typedef struct {
     unsigned count;
     uint8_t address[2][6];
+    uint8_t model[2];
 } GoBtTargetCache;
 
 int gobt_target_contains(const GoBtTargetCache *cache, const uint8_t address[6]);
 int gobt_target_remember(GoBtTargetCache *cache, const uint8_t address[6]);
+unsigned gobt_target_model(const GoBtTargetCache *cache, const uint8_t address[6]);
+int gobt_target_remember_model(GoBtTargetCache *cache, const uint8_t address[6], unsigned model);
 int gobt_target_encode(const GoBtTargetCache *cache, uint8_t bytes[GOBT_TARGET_CACHE_BYTES]);
 int gobt_target_decode(GoBtTargetCache *cache, const uint8_t *bytes, size_t size);
 #endif

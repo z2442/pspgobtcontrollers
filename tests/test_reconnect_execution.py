@@ -21,6 +21,7 @@ class Session:
         self.matching = True
         self.reads, self.starts, self.writes, self.closes = [], [], [], []
         self.stops, self.stop_error = [], 0
+        self.write_error = 79
         self.cpu.mem_write(self.provider + 44, struct.pack("<I", 7))
         self.cpu.mem_write(self.cdc + 44, struct.pack("<I", 7))
         self.cpu.mem_write(self.cdc + 108, struct.pack("<I", self.states - 0x23A0))
@@ -99,7 +100,7 @@ class Session:
         if address == self.writer:
             self.case.assertEqual((args[0], args[1] % 64, args[2]), (2, 0, 79))
             self.writes.append(bytes(m.mem_read(args[1], 79)))
-            returns[address] = 79
+            returns[address] = self.write_error
         if address == self.disconnect:
             self.case.assertEqual(args[:3], [1, 2, 0])
             self.closes.append(1)
@@ -137,12 +138,93 @@ class Session:
 
 
 class Reconnect(unittest.TestCase):
-    def paired_target(self, session, known=True, address=b"\x01\x02\x03\x04\x05\x06", caps=0x402, slot=1):
+    def paired_target(self, session, known=True, address=b"\x01\x02\x03\x04\x05\x06", caps=0x402, slot=1,
+                      model=0):
         table = 0x88205000
         word(session.cpu, "paired_records", table)
         session.cpu.mem_write(session.physical(table + 0x24), struct.pack("<HHH", slot, caps, 0) + address)
-        cache = struct.pack("<I", int(known)) + (b"\x01\x02\x03\x04\x05\x06" if known else bytes(6)) + bytes(6)
+        cache = (struct.pack("<I", int(known)) +
+                 (b"\x01\x02\x03\x04\x05\x06" if known else bytes(6)) + bytes(6) + bytes([model, 0]))
         session.cpu.mem_write(SYMBOLS["target_cache"], cache)
+
+    def test_saved_model_reconnects_with_unavailable_metadata_and_keeps_correct_output_protocol(self):
+        for model, report_id in ((1, 0x31), (2, 0x11)):
+            with self.subTest(model=model):
+                s = Session(self)
+                self.paired_target(s, model=model)
+                s.query_error = 0x802F0203
+                word(s.cpu, "get_info", 0xDEADBEEF)
+                word(s.cpu, "record_command", 0xDEADBEEF)
+                s.invoke("worker", 0, 0)
+                self.assertEqual((len(s.starts), len(s.writes)), (1, 1))
+                self.assertEqual(s.writes[-1][1], report_id)
+                s.flags = 0
+                s.invoke("poll_links")
+                s.cpu.mem_write(s.physical(s.context), bytes(48))
+                s.cpu.mem_write(s.physical(s.states + 2 * 12 + 0x7C), bytes(12))
+                s.flags, s.clock = 0x202, 500000
+                s.invoke("worker", 0, 0)
+                self.assertEqual((len(s.starts), len(s.writes)), (2, 2))
+                self.assertEqual(s.writes[-1][1], report_id)
+                self.assertEqual(s.closes, [])
+
+    def test_accepted_activation_without_input_is_retried_after_settling_with_new_sequence(self):
+        s = Session(self)
+        s.invoke("worker", 0, 0)
+        for clock, count in ((100999, 1), (101000, 2), (200999, 2), (201000, 3), (401000, 3)):
+            s.clock = clock
+            s.invoke("worker", 0, 0)
+            self.assertEqual(len(s.writes), count)
+        self.assertEqual([packet[2] for packet in s.writes], [0, 0x10, 0x20])
+        self.assertEqual((len(s.starts), s.stops, s.closes), (1, [], []))
+
+    def test_failed_activation_retries_without_rebuilding_a_live_read(self):
+        s = Session(self)
+        s.write_error = 0x802F0208
+        s.invoke("worker", 0, 0)
+        s.clock, s.write_error = 201000, 79
+        s.invoke("worker", 0, 0)
+        self.assertEqual([packet[2] for packet in s.writes], [0, 0x10])
+        self.assertEqual((len(s.starts), s.stops, s.closes), (1, [], []))
+
+    def test_valid_input_prevents_a_redundant_activation_write_and_clears_recovery_delay(self):
+        s = Session(self)
+        s.invoke("worker", 0, 0)
+        s.clock = 101000
+        word(s.cpu, "stream_recoveries", 0)
+        s.cpu.mem_write(SYMBOLS["stream_recoveries"] + 4, struct.pack("<I", 3))
+        s.cpu.mem_write(SYMBOLS["setup_retry_after"] + 8, struct.pack("<Q", 10000000))
+        report = bytes([0xA1, 1, 128, 128, 128, 128, 8, 0, 0, 0, 0])
+        packet = struct.pack("<6IQ", 0, s.read_word("generations"), 1,
+                             len(report), 0, len(report), s.clock) + report
+        s.cpu.mem_write(0x0A600800, packet)
+        def sink(m, address, _, __):
+            if address in (SYMBOLS["gobt_sink_start"], SYMBOLS["gobt_sink_submit_state"]):
+                m.reg_write(reg.UC_MIPS_REG_V0, 0)
+                m.reg_write(reg.UC_MIPS_REG_PC, m.reg_read(reg.UC_MIPS_REG_RA))
+        s.cpu.hook_add(UC_HOOK_CODE, sink)
+        s.invoke("consume", 0x0A600800)
+        s.clock = 401000
+        s.invoke("worker", 0, 0)
+        self.assertEqual(len(s.writes), 1)
+        self.assertEqual(struct.unpack("<I", s.cpu.mem_read(SYMBOLS["stream_recoveries"] + 4, 4))[0], 0)
+        self.assertEqual(struct.unpack("<Q", s.cpu.mem_read(SYMBOLS["setup_retry_after"] + 8, 8))[0], 0)
+
+    def test_exhausted_fast_recovery_budget_retries_after_cooldown_without_repairing(self):
+        s = Session(self)
+        s.invoke("worker", 0, 0)
+        for clock in (2201000, 4401000, 6601000):
+            s.clock = clock
+            s.invoke("worker", 0, 0)
+        self.assertEqual(len(s.stops), 3)
+        s.clock = 16600999
+        s.invoke("worker", 0, 0)
+        self.assertEqual(len(s.stops), 3)
+        s.clock = 16601000
+        s.invoke("poll_links")
+        s.invoke("worker", 0, 0)
+        self.assertEqual((len(s.stops), len(s.starts)), (4, 5))
+        self.assertEqual(s.closes, [])
 
     def test_already_connected_known_peer_starts_without_metadata_queries(self):
         session = Session(self)
@@ -204,6 +286,8 @@ class Reconnect(unittest.TestCase):
         next_instance.cpu.mem_write(0x0A600700, configurations[0])
         self.assertEqual(next_instance.invoke("gobt_target_decode", SYMBOLS["target_cache"], 0x0A600700, 32), 0)
         word(next_instance.cpu, "get_info", 0xDEADBEEF)
+        word(next_instance.cpu, "record_command", 0xDEADBEEF)
+        next_instance.query_error = 0x802F0203
         next_instance.invoke("worker", 0, 0)
         self.assertEqual(next_instance.reads, [])
         self.assertEqual(len(next_instance.writes), 1)
@@ -216,7 +300,7 @@ class Reconnect(unittest.TestCase):
         self.assertEqual(session.stops, [])
         session.clock = 2201000
         session.invoke("worker", 0, 0)
-        self.assertEqual((len(session.stops), len(session.starts), len(session.writes)), (1, 2, 2))
+        self.assertEqual((len(session.stops), len(session.starts), len(session.writes)), (1, 2, 3))
         self.assertEqual(session.flags, 0x202)
         self.assertEqual(session.closes, [])
 

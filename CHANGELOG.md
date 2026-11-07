@@ -1,5 +1,11 @@
 # Unreleased
 
+- Remember the controller model with its paired address so later connections
+  can enable input without another metadata lookup. Read existing address-only
+  configuration files and upgrade them after identifying the controller.
+- Retry activation when a completed write produces no input, advancing the
+  DualSense output sequence. Continue silent-stream recovery with a cooldown
+  after the initial three attempts, keeping the working pairing intact.
 - Let the native controller sampler consume already received input from a
   selected, initialized controller without waiting for the input worker.
   Preserve ordered fragments, CRC checks, timeout and lifecycle guards.

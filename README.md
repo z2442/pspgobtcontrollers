@@ -56,8 +56,10 @@ Leave development markers such as `enable-filter`, `enable-input`, and
 - Release builds generate no diagnostic logs or firmware dumps.
 
 The plugin may save a small `controllers.cfg` file in its installation folder
-so later plugin instances can recognize paired controllers. It contains up to
-two Bluetooth addresses and a checksum, with no link keys or input history.
+so later plugin instances can recognize paired controllers. Source builds save
+the controller model with each of up to two Bluetooth addresses and a checksum,
+with no link keys or input history. Existing configurations are upgraded after
+a successful model lookup. See [reconnect input setup](docs/reconnect-input.md).
 
 Touchpad, microphone, motion, haptics, adaptive triggers, battery reporting,
 Edge-specific controls, and USB input are not implemented.

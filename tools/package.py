@@ -37,6 +37,7 @@ files = [
     "docs/connect-v027.md",
     "docs/performance-v028.md",
     "docs/input-latency.md",
+    "docs/reconnect-input.md",
     "seplugins/pspgobt/pspgobt_probe.prx", "seplugins/pspgobt/PLUGINS.TXT.example",
 ]
 variant = "debug" if debug else "session-trace" if session_trace else "release"

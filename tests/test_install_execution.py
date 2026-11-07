@@ -174,6 +174,9 @@ class Installer(unittest.TestCase):
         data = bytearray(b"GBTC\x01\x01\0\0" + bytes([1, 2, 3, 4, 5, 6]) + bytes(14))
         data += struct.pack("<I", zlib.crc32(b"\0" + data))
         s.cache_data = bytes(data)
+        upgraded = bytearray(data)
+        upgraded[4] = 2
+        struct.pack_into("<I", upgraded, 28, zlib.crc32(b"\0" + upgraded[:28]))
         self.assertEqual(s.call("gobt_start_input_bridge", 0x06060010), 0)
         self.assertEqual(s.read_word("target_cache"), 1)
         s.call("worker", 0, 0)  # Bind providers, then exercise worker persistence.
@@ -182,11 +185,11 @@ class Installer(unittest.TestCase):
         s.write_result = 31
         s.call("worker", 0, 0)
         self.assertEqual(s.read_word("cache_dirty"), 1)
-        self.assertEqual(s.writes, [bytes(data)])
+        self.assertEqual(s.writes, [bytes(upgraded)])
         s.write_result, s.clock = 32, 1001000
         s.call("worker", 0, 0)
         self.assertEqual(s.read_word("cache_dirty"), 0)
-        self.assertEqual(s.writes[-1], bytes(data))
+        self.assertEqual(s.writes[-1], bytes(upgraded))
 
 
 if __name__ == "__main__":

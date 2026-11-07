@@ -899,6 +899,29 @@ static void test_target_cache(void)
     assert(gobt_target_decode(&restored, bytes, sizeof(bytes) - 1) < 0);
     assert(gobt_target_remember(&cache, third) == 1);
     assert(!gobt_target_contains(&cache, first) && gobt_target_contains(&cache, second) && gobt_target_contains(&cache, third));
+    assert(gobt_target_remember_model(&cache, second, GOBT_MODEL_DUALSHOCK4) == 1);
+    assert(gobt_target_remember_model(&cache, third, GOBT_MODEL_DUALSENSE) == 1);
+    assert(gobt_target_remember_model(&cache, third, GOBT_MODEL_DUALSENSE) == 0);
+    assert(gobt_target_remember(&cache, third) == 0); /* never erase a known model */
+    assert(gobt_target_encode(&cache, bytes) == 0 && bytes[4] == 2);
+    assert(gobt_target_decode(&restored, bytes, sizeof(bytes)) == 0);
+    assert(gobt_target_model(&restored, second) == GOBT_MODEL_DUALSHOCK4);
+    assert(gobt_target_model(&restored, third) == GOBT_MODEL_DUALSENSE);
+    assert(gobt_target_model(&restored, first) == GOBT_MODEL_NONE);
+    assert(gobt_target_remember_model(&restored, first, GOBT_MODEL_DUALSENSE) == 1);
+    assert(!gobt_target_contains(&restored, second));
+    assert(gobt_target_model(&restored, third) == GOBT_MODEL_DUALSENSE);
+    assert(gobt_target_model(&restored, first) == GOBT_MODEL_DUALSENSE);
+    bytes[6] = 3; /* invalid model with a valid checksum */
+    put_word(bytes, 28, ds_crc32(0, bytes, 28));
+    assert(gobt_target_decode(&restored, bytes, sizeof(bytes)) < 0 && !restored.count);
+    bytes[4] = 1; bytes[6] = bytes[7] = 0;
+    put_word(bytes, 28, ds_crc32(0, bytes, 28));
+    assert(gobt_target_decode(&restored, bytes, sizeof(bytes)) == 0);
+    assert(gobt_target_contains(&restored, second) && gobt_target_contains(&restored, third));
+    assert(gobt_target_model(&restored, second) == GOBT_MODEL_NONE);
+    assert(gobt_target_remember_model(&restored, second, GOBT_MODEL_DUALSHOCK4) == 1);
+    assert(gobt_target_encode(&restored, bytes) == 0 && bytes[4] == 2);
 }
 
 int main(void)

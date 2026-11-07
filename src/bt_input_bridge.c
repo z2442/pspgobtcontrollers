@@ -332,28 +332,39 @@ static int classify(unsigned device, void *info, int *query, int *cached)
 {
     uint8_t address[6];
     int has_address, selected, interrupts;
+    unsigned model = GOBT_MODEL_NONE;
     *cached = 0;
     *query = -1;
     if (!installed || suspended || quiescing || device < 1 || device > 8 || session_closing(device)) return 0;
     has_address = slot_address(device, address);
     interrupts = sceKernelCpuSuspendIntr();
-    if (has_address) *cached = gobt_target_contains(&target_cache, address);
+    if (has_address) {
+        *cached = gobt_target_contains(&target_cache, address);
+        model = gobt_target_model(&target_cache, address);
+    }
     sceKernelCpuResumeIntr(interrupts);
     if (*cached) {
+        /* A bonded peer's model must survive a reconnect/new PRX without
+         * depending on the name record being available during setup. */
+        if (model) {
+            uint8_t current[6];
+            if (!slot_address(device, current) || memcmp(address, current, 6)) return 0;
+            device_models[device] = model;
+            *query = 0;
+            return 1;
+        }
         /* The local 0x63 record avoids a remote DID query on reconnect. */
         *query = record_command ? cached_info(device, info) : -1;
-        device_models[device] = *query >= 0 && gobt_input_metadata(info, 80) ?
-                                gobt_controller_model(info, 80, 80) : GOBT_MODEL_NONE;
-        return 1;
+    } else {
+        *query = get_info(device, info);
     }
-    *query = get_info(device, info);
     selected = *query >= 0 && gobt_input_metadata(info, 80);
     device_models[device] = selected ? gobt_controller_model(info, 80, 80) : GOBT_MODEL_NONE;
     if (selected && has_address) {
         uint8_t current[6];
         if (!slot_address(device, current) || memcmp(address, current, 6)) return 0;
         interrupts = sceKernelCpuSuspendIntr();
-        if (gobt_target_remember(&target_cache, address) == 1) {
+        if (gobt_target_remember_model(&target_cache, address, device_models[device]) == 1) {
             ++cache_revision;
             cache_dirty = 1;
         }
@@ -981,7 +992,7 @@ static void initialize(unsigned index, unsigned device, InputSource *source)
     unsigned channel = *(const u32 *)contexts[index];
     unsigned timeout = 200000;
     int result;
-    if (source->initialized || !source->accepted || !device_models[device] ||
+    if ((source->initialized && last_report[index]) || !source->accepted || !device_models[device] ||
         !reads_ready[index] || suspended || quiescing || session_closing(device) ||
         source->attempts >= 3 || (uint64_t)sceKernelGetSystemTimeWide() < source->retry_after ||
         channel < 1 || channel > 4 || ((const u16 *)contexts[index])[2] != device ||
@@ -991,12 +1002,16 @@ static void initialize(unsigned index, unsigned device, InputSource *source)
     memset(output, 0, sizeof(output));
     output[0] = 0xa2;
     if (device_models[device] == GOBT_MODEL_DUALSHOCK4) ds4_build_enable(output + 1);
-    else ds_build_enable(output + 1, 0);
+    else ds_build_enable(output + 1, (uint8_t)(source->attempts - 1));
     gobt_session_trace(GOBT_TRACE_INIT, device, index, generation, source->attempts);
     result = write_hid(channel, output, 79, &timeout);
     gobt_session_trace(GOBT_TRACE_INIT_DONE, device, (unsigned)result, generation, generations[index]);
-    if (result == 79 && generations[index] == generation && !session_closing(device)) source->initialized = 1;
-    else source->retry_after = sceKernelGetSystemTimeWide() + 200000;
+    if (result == 79 && generations[index] == generation && !session_closing(device)) {
+        source->initialized = 1;
+        /* Transport completion is not confirmation of usable input. A
+         * second activation after settling handles an ignored early write. */
+        source->retry_after = sceKernelGetSystemTimeWide() + 100000;
+    } else source->retry_after = sceKernelGetSystemTimeWide() + 200000;
     gobt_log("bt-input init device=%u source=%u channel=%u bytes=79 result=%08X generation=%u attempt=%u\n",
              device, index, channel, (unsigned)result, generation, source->attempts);
 }
@@ -1023,9 +1038,11 @@ static __attribute__((noipa)) void connected(unsigned device, int checked)
         !discovery_bypassed[i] || !attach_pending_read(i, device))) {
         /* A surviving Sony context is not proof of a live read. Rebuild a
          * previous instance's context, or recover a stopped owned read. */
-        setup_retry_after[device] = sceKernelGetSystemTimeWide() + 1000000;
         interrupts = sceKernelCpuSuspendIntr();
-        if (recover_devices & (1u << device)) ++stream_recoveries[device];
+        if ((recover_devices & (1u << device)) && stream_recoveries[device] < 3)
+            ++stream_recoveries[device];
+        setup_retry_after[device] = sceKernelGetSystemTimeWide() +
+                                    (stream_recoveries[device] >= 3 ? 10000000 : 1000000);
         recover_devices &= ~(1u << device);
         sceKernelCpuResumeIntr(interrupts);
         if (reset_input_context(i, device, 0) < 0) return;
@@ -1205,12 +1222,13 @@ static __attribute__((noipa)) void poll_links(void)
             }
         } else if (slot >= 1 && slot <= 8 && (current & prepared_devices & (1u << slot)) &&
                    discovery_bypassed[device] && sources[device].accepted &&
-                   stream_started[device] && stream_recoveries[slot] < 3 &&
+                   stream_started[device] &&
                    now >= setup_retry_after[slot]) {
             uint64_t previous = last_report[device] ? last_report[device] : stream_started[device];
             /* An installed CDC callback is not proof of received reports.
              * Retry local input setup after two silent seconds, at most
-             * three times until fresh valid input or a new link resets it. */
+             * three times quickly, then at most once every ten seconds.
+             * Never leave a connected peer permanently unable to recover. */
             if (now >= previous && now - previous >= 2000000) {
                 recover_devices |= 1u << slot;
                 serviced_devices &= ~(1u << slot);
@@ -1258,7 +1276,6 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
         initialize(packet->source, packet->device, source);
         return;
     }
-    initialize(packet->source, packet->device, source);
     if (source->previous && packet->received - source->previous >= GOBT_INPUT_TIMEOUT_US)
         source->assembly.used = 0;
     source->previous = packet->received;
@@ -1281,8 +1298,10 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
             interrupts = sceKernelCpuSuspendIntr();
             if (!suspended && packet->generation == generations[packet->source]) {
                 last_report[packet->source] = packet->received;
-                if (packet->device >= 1 && packet->device <= 8)
+                if (packet->device >= 1 && packet->device <= 8) {
                     stream_recoveries[packet->device] = 0;
+                    setup_retry_after[packet->device] = 0;
+                }
             }
             sceKernelCpuResumeIntr(interrupts);
             if (!source->good) gobt_session_trace(GOBT_TRACE_INPUT, packet->device, generation, packet->source, source->initialized);
@@ -1303,6 +1322,9 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
             sceKernelCpuResumeIntr(interrupts);
             if (result >= 0 && ++source->good <= 4)
                 gobt_log("bt-input forwarded source=%u reports=%u\n", packet->source, source->good);
+            /* Publish received controls before any activation write can
+             * wait. Valid input also suppresses unnecessary retries. */
+            initialize(packet->source, packet->device, source);
             return;
         }
         if (result == 0) return;
@@ -1349,8 +1371,10 @@ void gobt_input_bridge_sample(void)
                 if (now >= packet->received && now - packet->received < GOBT_INPUT_TIMEOUT_US) {
                     gobt_sink_submit_state(&state);
                     last_report[packet->source] = packet->received;
-                    if (packet->device >= 1 && packet->device <= 8)
+                    if (packet->device >= 1 && packet->device <= 8) {
                         stream_recoveries[packet->device] = 0;
+                        setup_retry_after[packet->device] = 0;
+                    }
                 }
             }
         }
