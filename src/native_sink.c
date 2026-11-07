@@ -8,6 +8,7 @@
 #include <systemctrl.h>
 #include "input_state.h"
 #include "native_sink.h"
+#include "bt_input_bridge.h"
 
 typedef struct {
     int size;
@@ -59,6 +60,7 @@ static int copy_input(void *source, GoBtCtrlData2 *destination)
     int interrupts = sceKernelCpuSuspendIntr();
     int fresh;
     (void)source;
+    gobt_input_bridge_sample();
     fresh = gobt_input_sample(&input, sceKernelGetSystemTimeWide(), destination);
     sceKernelCpuResumeIntr(interrupts);
     return fresh ? 0 : -1;

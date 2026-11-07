@@ -115,5 +115,6 @@ package: all
 	cp docs/transport-v026.md dist/docs/
 	cp docs/connect-v027.md dist/docs/
 	cp docs/performance-v028.md dist/docs/
+	cp docs/input-latency.md dist/docs/
 	python3 tools/package.py --debug $(PSPGOBT_DEBUG) --session-trace $(PSPGOBT_SESSION_TRACE)
 endif

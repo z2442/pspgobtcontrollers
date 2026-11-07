@@ -90,6 +90,62 @@ def full_report(pressed=False):
 
 
 class InputScheduling(unittest.TestCase):
+    def ready_sampler(self):
+        s = InputSession(self)
+        s.put_queued(full_report(False))
+        s.invoke("worker", 0, 0)
+        s.samples.clear()
+        s.waits.clear()
+        s.module_lookups = 0
+        return s
+
+    def test_sampler_drains_received_reports_without_scheduling_worker_or_provider_calls(self):
+        s = self.ready_sampler()
+        previous = (list(s.reads), list(s.writes), list(s.starts))
+        for i in range(16):
+            s.put_queued(full_report(not i % 2))
+        s.invoke("gobt_input_bridge_sample")
+        self.assertEqual(s.samples, [1 << 14, 0] * 8)
+        self.assertEqual((s.read_word("queued"), s.waits, s.delays, s.module_lookups), (0, [], [], 0))
+        self.assertEqual((s.reads, s.writes, s.starts), previous)
+
+    def test_sampler_keeps_fragment_order_and_rejects_corruption_and_expired_input(self):
+        s = self.ready_sampler()
+        packet = full_report(True)
+        damaged = bytearray(packet)
+        damaged[20] ^= 1
+        s.put_queued(packet)
+        s.clock += 250000
+        s.put_queued(packet[:64])
+        s.invoke("gobt_input_bridge_sample")
+        self.assertEqual(s.samples, [])
+        s.put_queued(packet[64:])
+        s.put_queued(bytes(damaged))
+        s.put_queued(full_report(False))
+        s.invoke("gobt_input_bridge_sample")
+        self.assertEqual(s.samples, [1 << 14, 0])
+        self.assertEqual(s.read_word("queued"), 0)
+
+    def test_sampler_defers_lifecycle_work_and_never_reenters_worker_state(self):
+        for name, value in (("worker_busy", 1), ("binding", 1), ("installed", 0),
+                            ("suspended", 1), ("quiescing", 1),
+                            ("closing_devices", 2), ("disconnect_requests", 2),
+                            ("active_source", 1)):
+            with self.subTest(name=name):
+                s = self.ready_sampler()
+                s.put_queued(full_report(True))
+                word(s.cpu, name, value)
+                s.invoke("gobt_input_bridge_sample")
+                self.assertEqual((s.samples, s.read_word("queued")), ([], 1))
+        s = self.ready_sampler()
+        s.put_queued(full_report(True), s.read_word("generations") - 1)
+        s.invoke("gobt_input_bridge_sample")
+        self.assertEqual((s.samples, s.read_word("queued")), ([], 1))
+        s = InputSession(self)  # Not yet accepted by the worker.
+        s.put_queued(full_report(True))
+        s.invoke("gobt_input_bridge_sample")
+        self.assertEqual((s.samples, s.read_word("queued")), ([], 1))
+
     def test_idle_blocks_on_notification_with_fifty_ms_maintenance_timeout(self):
         s = InputSession(self)
         s.invoke("worker", 0, 0)

@@ -183,6 +183,7 @@ class CompiledBridge(unittest.TestCase):
         word(cpu, "reads_ready", int(ready))
         word(cpu, "connection_flags", flags)
         word(cpu, "write_hid", native)
+        cpu.mem_write(SYMBOLS["device_models"] + 4, struct.pack("<I", 1))  # DualSense in slot 1
         source = SYMBOLS["sources"]
         cpu.mem_write(source + 8, struct.pack("<I", 1))  # accepted
         cpu.reg_write(reg.UC_MIPS_REG_A0, 0)

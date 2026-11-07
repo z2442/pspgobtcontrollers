@@ -1,3 +1,10 @@
+# Unreleased
+
+- Let the native controller sampler consume already received input from a
+  selected, initialized controller without waiting for the input worker.
+  Preserve ordered fragments, CRC checks, timeout and lifecycle guards.
+  Hardware latency improvement still needs confirmation.
+
 # PSPGoBT v1.0
 
 First stable release for using a DualSense with the PSP Go's built-in Bluetooth.

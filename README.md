@@ -48,7 +48,9 @@ Leave development markers such as `enable-filter`, `enable-input`, and
   native DS3 input interface. PSP games use the PSP's native controller mapping.
 - **Create/Share** maps to Select, **Options** to Start, and **PS** to the native PS button.
 - Input processing wakes on received data, with bounded batches to give games
-  CPU time. The plugin does not change the PSP CPU clock.
+  CPU time. Source builds also let the native sampler decode queued input from
+  an established stream immediately, without another worker pass. The plugin
+  does not change the PSP CPU clock. See [input latency](docs/input-latency.md).
 - Disconnecting, suspending, or receiving no valid report for 250 ms releases
   held input.
 - Release builds generate no diagnostic logs or firmware dumps.

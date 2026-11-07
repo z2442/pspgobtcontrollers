@@ -16,6 +16,7 @@ class Session:
         self.info, self.flags_api, self.setup, self.disconnect = 0x0A700100, 0x0A700200, 0x0A700300, 0x0A700400
         self.writer, self.did = 0x0A700500, 0x0A700600
         self.stop = 0x0A700700
+        self.record = 0x0A700800
         self.clock, self.flags, self.query_error, self.setup_error = 1000, 0x202, 0, 0
         self.matching = True
         self.reads, self.starts, self.writes, self.closes = [], [], [], []
@@ -27,7 +28,8 @@ class Session:
         for name, value in (("installed", 1), ("provider_uid", 7), ("cdc_provider_uid", 7), ("get_info", self.info),
                             ("connection_flags", self.flags_api), ("start_hid", self.setup),
                             ("disconnect_hid", self.disconnect), ("write_hid", self.writer),
-                            ("stop_hid", self.stop), ("cdc_read_states", self.states)):
+                            ("stop_hid", self.stop), ("cdc_read_states", self.states),
+                            ("record_command", self.record)):
             word(self.cpu, name, value)
         self.cpu.hook_add(UC_HOOK_CODE, self.observe)
 
@@ -60,6 +62,21 @@ class Session:
             record[6:6 + len(name)] = name
             struct.pack_into("<H", record, 72, 0x402)
             m.mem_write(args[1], bytes(record))
+            returns[address] = self.query_error
+        if address == self.record:
+            # Cached peers now query their local model record to distinguish
+            # DualSense and DS4; they still avoid the public metadata API.
+            command, length, payload = struct.unpack("<HHI", m.mem_read(args[0], 8))
+            self.case.assertEqual((command, length), (0x63, 2))
+            device = struct.unpack("<H", m.mem_read(payload, 2))[0]
+            output = struct.unpack("<I", m.mem_read(args[1] + 8, 4))[0]
+            record = bytearray(80)
+            struct.pack_into("<H", record, 0, device)
+            name = ("DualSense Wireless Controller" if self.matching else "Other Controller").encode("utf-16le")
+            record[2:2 + len(name)] = name
+            struct.pack_into("<H", record, 68, 0x402)
+            m.mem_write(output, bytes(record))
+            m.mem_write(args[1] + 4, bytes(2))
             returns[address] = self.query_error
         if address == self.did:
             self.case.fail("Boot/reconnect must not launch remote DID discovery")

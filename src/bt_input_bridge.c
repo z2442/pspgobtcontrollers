@@ -77,6 +77,7 @@ static uintptr_t wide_native[2];
 static uint8_t receive_buffers[2][RECEIVE_CAPACITY] __attribute__((aligned(64)));
 static int installed;
 static int worker_started;
+static volatile int worker_busy;
 static int binding;
 static int quiescing, shutdown_done, shutdown_cleanup_done;
 static unsigned shutdown_attempted;
@@ -1313,6 +1314,53 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
                  packet->event == 0 && packet->size >= 2 && packet->size <= RECEIVE_CAPACITY ? packet->bytes[1] : 0);
 }
 
+void gobt_input_bridge_sample(void)
+{
+    unsigned processed = 0;
+    int interrupts = sceKernelCpuSuspendIntr();
+    /* The worker owns selection, initialization and lifecycle changes. The
+     * sampler may drain only a stable stream while that worker is asleep.
+     * This also prevents reentering fragment assembly mid-worker decode. */
+    while (installed && !binding && !worker_busy && !suspended && !quiescing &&
+           queued && processed < 16) {
+        const ReceivedPacket *packet = &queue[head];
+        InputSource *source = &sources[packet->source];
+        DsState state;
+        uint64_t now;
+        int result;
+        if (packet->event || !packet->size || packet->size > RECEIVE_CAPACITY ||
+            active_source != (int)packet->source || session_closing(packet->device) ||
+            packet->generation != generations[packet->source] ||
+            source->generation != packet->generation || !source->accepted ||
+            !source->initialized || !source->good) break;
+        now = sceKernelGetSystemTimeWide();
+        if (now < packet->received || now - packet->received >= GOBT_INPUT_TIMEOUT_US) {
+            source->assembly.used = 0;
+        } else {
+            if ((source->previous && packet->received - source->previous >= GOBT_INPUT_TIMEOUT_US) ||
+                (source->assembly.used && packet->received - source->assembly_started >= GOBT_INPUT_TIMEOUT_US))
+                source->assembly.used = 0;
+            source->previous = packet->received;
+            if (!source->assembly.used || packet->bytes[0] == 0xa1)
+                source->assembly_started = packet->received;
+            result = gobt_decode_hidp(&source->assembly, packet->bytes, packet->size, &state);
+            if (result == 1) {
+                now = sceKernelGetSystemTimeWide();
+                if (now >= packet->received && now - packet->received < GOBT_INPUT_TIMEOUT_US) {
+                    gobt_sink_submit_state(&state);
+                    last_report[packet->source] = packet->received;
+                    if (packet->device >= 1 && packet->device <= 8)
+                        stream_recoveries[packet->device] = 0;
+                }
+            }
+        }
+        head = (head + 1) % 16;
+        --queued;
+        ++processed;
+    }
+    sceKernelCpuResumeIntr(interrupts);
+}
+
 /* Caller holds interrupts and has waited for our callbacks. The manager can
  * outlive its CDC transport: restore these sites before checking/rebinding
  * that same manager image, otherwise its own guards see our old patches. */
@@ -1427,6 +1475,7 @@ static int worker(SceSize args, void *argp)
 {
     (void)args; (void)argp;
     for (;;) {
+        worker_busy = 1;
         /* Initial binding can start this thread before publishing provider
          * IDs and installed=1. Do not discard its half-published contexts. */
         if (binding) { sceKernelDelayThread(5000); continue; }
@@ -1556,6 +1605,7 @@ static int worker(SceSize args, void *argp)
         }
         gobt_sink_maintain();
         save_target_cache();
+        worker_busy = 0;
         /* Keep native callback threads and games runnable even under a
          * continuous report flood. Normal traffic sleeps until notified;
          * provider lookup and maintenance run once per batch, not report. */

@@ -9,7 +9,8 @@ from test_bridge_execution import machine, SYMBOLS, word
 
 
 class ControllerTransfer(unittest.TestCase):
-    def exercise(self, simple=False, corrupt=False, prepared=True, reconnect=False, delayed_reset=False):
+    def exercise(self, simple=False, corrupt=False, prepared=True, reconnect=False, delayed_reset=False,
+                 queued_release=False):
         cpu = machine()
         cpu.mem_map(0x08200000, 0x10000)
         physical = lambda p: p & 0x1FFFFFFF if p >= 0x80000000 else p
@@ -149,6 +150,24 @@ class ControllerTransfer(unittest.TestCase):
         self.assertEqual((timestamp, buttons), (0x12345678, 0x14410))  # PS, Cross, L1, Up
         self.assertEqual(frame[8:14], bytes([11, 22, 33, 44, 128, 128]))
         self.assertEqual(struct.unpack_from("<I", frame, 36)[0], 55 | (66 << 16))
+        if queued_release:
+            # Sony asks for a sample before the worker has run again. The
+            # already received release must reach this very sample.
+            clock[0] += 1000
+            release = bytes([0xA1, 1, 128, 128, 128, 128, 8, 0, 0, 0, 0])
+            header = struct.pack("<5IiQ", 0, 7, 1, len(release), 0, len(release), clock[0])
+            cpu.mem_write(SYMBOLS["queue"], header + release)
+            word(cpu, "head", 0)
+            word(cpu, "tail", 1)
+            word(cpu, "queued", 1)
+            cpu.mem_write(SYMBOLS["sources"] + 20, struct.pack("<I", 1))  # initialized
+            previous = list(calls)
+            self.assertEqual(invoke("copy_input", [handler["source"], destination]), 0)
+            frame = bytes(cpu.mem_read(destination, 48))
+            self.assertEqual(struct.unpack_from("<II", frame), (0x12345678, 0))
+            self.assertEqual(frame[8:12], bytes([128] * 4))
+            self.assertEqual(struct.unpack("<I", cpu.mem_read(SYMBOLS["queued"], 4))[0], 0)
+            self.assertEqual(calls, previous)  # no registration or passthrough work in sampler
         clock[0] += 250000
         self.assertEqual(invoke("copy_input", [handler["source"], destination]), 0xFFFFFFFF)
         frame = bytes(cpu.mem_read(destination, 48))
@@ -164,6 +183,9 @@ class ControllerTransfer(unittest.TestCase):
 
     def test_complete_full_report_reaches_ds3_transfer_handler(self):
         self.exercise()
+
+    def test_received_release_reaches_current_sample_without_another_worker_pass(self):
+        self.exercise(queued_release=True)
 
     def test_basic_report_reaches_ds3_transfer_handler(self):
         self.exercise(simple=True)
