@@ -11,15 +11,20 @@ int gobt_controller_model(const uint8_t *info, size_t size, uint32_t record_size
 {
     static const char sense[] = "DualSense";
     static const char shock[] = "Wireless Controller";
+    static const char pro[] = "Pro Controller";
     unsigned i;
-    if (!info || size < record_size || le32(info) != record_size) return GOBT_MODEL_NONE;
+    if (!info || record_size < 80 || size < record_size || le32(info) != record_size) return GOBT_MODEL_NONE;
     for (i = 0; i < sizeof(sense) - 1; ++i)
         if (info[6 + 2 * i] != (uint8_t)sense[i] || info[7 + 2 * i]) break;
     if (i == sizeof(sense) - 1 && !info[25] && (!info[24] || info[24] == ' '))
         return GOBT_MODEL_DUALSENSE;
     for (i = 0; i < sizeof(shock) - 1; ++i)
-        if (info[6 + 2 * i] != (uint8_t)shock[i] || info[7 + 2 * i]) return GOBT_MODEL_NONE;
-    return !info[6 + 2 * i] && !info[7 + 2 * i] ? GOBT_MODEL_DUALSHOCK4 : GOBT_MODEL_NONE;
+        if (info[6 + 2 * i] != (uint8_t)shock[i] || info[7 + 2 * i]) break;
+    if (i == sizeof(shock) - 1 && !info[6 + 2 * i] && !info[7 + 2 * i])
+        return GOBT_MODEL_DUALSHOCK4;
+    for (i = 0; i < sizeof(pro) - 1; ++i)
+        if (info[6 + 2 * i] != (uint8_t)pro[i] || info[7 + 2 * i]) return GOBT_MODEL_NONE;
+    return !info[6 + 2 * i] && !info[7 + 2 * i] ? GOBT_MODEL_SWITCH_PRO : GOBT_MODEL_NONE;
 }
 
 int gobt_input_metadata(const uint8_t *info, size_t size)
@@ -31,6 +36,7 @@ int gobt_input_metadata(const uint8_t *info, size_t size)
 int gobt_input_identity(const uint8_t *info, size_t size, unsigned vendor, unsigned product)
 {
     int model = gobt_input_metadata(info, size) ? gobt_controller_model(info, size, 80) : GOBT_MODEL_NONE;
+    if (model == GOBT_MODEL_SWITCH_PRO) return vendor == 0x057e && product == 0x2009;
     return vendor == 0x054c &&
            ((model == GOBT_MODEL_DUALSENSE && (product == 0x0ce6 || product == 0x0df2)) ||
             (model == GOBT_MODEL_DUALSHOCK4 && (product == 0x05c4 || product == 0x09cc)));

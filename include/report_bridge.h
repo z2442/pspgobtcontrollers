@@ -23,8 +23,8 @@ typedef struct {
     unsigned used;
 } GoBtReportAssembly;
 
-enum { GOBT_MODEL_NONE, GOBT_MODEL_DUALSENSE, GOBT_MODEL_DUALSHOCK4 };
-/* Exact Sony Bluetooth names in the PSP's UTF-16 device records. */
+enum { GOBT_MODEL_NONE, GOBT_MODEL_DUALSENSE, GOBT_MODEL_DUALSHOCK4, GOBT_MODEL_SWITCH_PRO };
+/* Supported Bluetooth names in the PSP's UTF-16 device records. */
 int gobt_controller_model(const uint8_t *info, size_t size, uint32_t record_size);
 
 /* HIDP DATA input (A1) and explicit DATC input (B1), exact bounded frames. */

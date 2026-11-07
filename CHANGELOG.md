@@ -1,5 +1,11 @@
 # Unreleased
 
+- Add experimental original Nintendo Switch Pro Controller Bluetooth support:
+  guarded model selection and pairing routes, regular report-mode setup,
+  positional face-button mapping, digital triggers, calibrated sticks,
+  player 1 light, and model persistence for reconnects. Host protocol and
+  emulated PSP bridge tests cover setup, input and reconnects; live PSP Go
+  pairing and input still need hardware verification.
 - Remember the controller model with its paired address so later connections
   can enable input without another metadata lookup. Read existing address-only
   configuration files and upgrade them after identifying the controller.

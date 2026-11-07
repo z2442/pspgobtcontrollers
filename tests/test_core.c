@@ -1,4 +1,5 @@
 #include "dualsense.h"
+#include "switch_pro.h"
 #include "xmb_patch.h"
 #include "input_state.h"
 #include "probe_policy.h"
@@ -24,6 +25,150 @@ static void set_name(uint8_t *record, const char *name)
     unsigned i;
     memset(record + 6, 0, 64);
     for (i = 0; name[i]; ++i) record[6 + 2 * i] = (uint8_t)name[i];
+}
+
+static void pack_stick(uint8_t *p, unsigned x, unsigned y)
+{
+    p[0] = (uint8_t)x;
+    p[1] = (uint8_t)((x >> 8) | ((y & 15) << 4));
+    p[2] = (uint8_t)(y >> 4);
+}
+
+static void switch_reply(uint8_t *report, unsigned command)
+{
+    memset(report, 0, 49);
+    report[0] = 0x21; report[13] = 0x80; report[14] = (uint8_t)command;
+}
+
+static void test_switch_pro(void)
+{
+    SwitchPro pro = {0}, missing = {0};
+    uint8_t report[50] = {0x30}, output[49], info[80] = {80}, scan[84] = {84};
+    uint8_t profile[GOBT_PROFILE_BYTES] = {0}, config[32];
+    uint8_t address[6] = {1, 2, 3, 4, 5, 6};
+    GoBtTargetCache cache = {0}, restored;
+    DsState state, before;
+    unsigned i, byte;
+    uint64_t now = 1000;
+    static const unsigned expected[3][8] = {
+        {15, 12, 14, 13, 32, 32, 11, 9},
+        {0, 3, 2, 1, 16, 32, 32, 32},
+        {6, 4, 5, 7, 32, 32, 10, 8}
+    };
+    pack_stick(report + 6, 2048, 2048);
+    pack_stick(report + 9, 2048, 2048);
+    assert(switch_pro_receive(&pro, report, 49, &state) == 1);
+    assert(!state.buttons && state.lx == 128 && state.ly == 128 && state.rx == 128 && state.ry == 128);
+    for (byte = 0; byte < 3; ++byte) {
+        for (i = 0; i < 8; ++i) {
+            report[3 + byte] = (uint8_t)(1u << i);
+            assert(switch_pro_receive(&pro, report, 49, &state) == 1);
+            assert(state.buttons == (expected[byte][i] < 32 ? 1u << expected[byte][i] : 0));
+            assert(state.l2 == (expected[byte][i] == 8 ? 255 : 0));
+            assert(state.r2 == (expected[byte][i] == 9 ? 255 : 0));
+        }
+        report[3 + byte] = 0;
+    }
+    pack_stick(report + 6, 0, 4095);
+    pack_stick(report + 9, 4095, 0);
+    assert(switch_pro_receive(&pro, report, 49, &state) == 1);
+    assert(state.lx == 0 && state.ly == 0 && state.rx == 255 && state.ry == 255);
+    before = state;
+    for (i = 0; i <= 50; ++i) {
+        if (i == 49) continue;
+        assert(switch_pro_receive(&pro, report, i, &state) < 0);
+        assert(!memcmp(&state, &before, sizeof(state)));
+    }
+    report[0] = 0x31;
+    assert(switch_pro_receive(&pro, report, 49, &state) < 0);
+    assert(switch_pro_receive(NULL, report, 49, &state) < 0);
+    assert(switch_pro_receive(&pro, NULL, 49, &state) < 0);
+    assert(switch_pro_receive(&pro, report, 49, NULL) < 0);
+
+    memset(&pro, 0, sizeof(pro));
+    assert(switch_pro_setup(&pro, now, output) == 1);
+    assert(output[0] == 1 && output[1] == 0 && output[10] == 3 && output[11] == 0x30);
+    assert(!memcmp(output + 2, "\0\1\100\100\0\1\100\100", 8));
+    assert(!switch_pro_setup(&pro, now + 99999, output));
+    switch_reply(report, 3);
+    report[13] = 0; /* NACK cannot complete a command. */
+    assert(switch_pro_receive(&pro, report, 49, &state) == 0 && pro.step == SWITCH_PRO_MODE);
+    report[13] = 0x80;
+    assert(switch_pro_receive(&pro, report, 49, &state) == 0 && pro.step == SWITCH_PRO_FACTORY);
+    assert(!memcmp(&state, &before, sizeof(state))); /* Replies never publish controls. */
+    now += 100000;
+    assert(switch_pro_setup(&pro, now, output) == 1);
+    assert(output[1] == 1 && output[10] == 0x10 && output[11] == 0x3d && output[12] == 0x60 && output[15] == 18);
+    switch_reply(report, 0x10);
+    report[13] = 0x90; report[15] = 0x3d; report[16] = 0x60; report[19] = 18;
+    pack_stick(report + 20, 1000, 1100); /* left above */
+    pack_stick(report + 23, 2100, 2200); /* left center */
+    pack_stick(report + 26, 900, 800);   /* left below */
+    pack_stick(report + 29, 2000, 1900); /* right center */
+    pack_stick(report + 32, 700, 600);   /* right below */
+    pack_stick(report + 35, 1200, 1300); /* right above */
+    report[15] ^= 1;
+    assert(switch_pro_receive(&pro, report, 49, &state) == 0 && pro.step == SWITCH_PRO_FACTORY);
+    report[15] ^= 1;
+    assert(switch_pro_receive(&pro, report, 49, &state) == 0 && pro.step == SWITCH_PRO_USER);
+    assert(pro.axis[0].center == 2100 && pro.axis[1].above == 1100 && pro.axis[2].below == 700);
+    now += 100000;
+    assert(switch_pro_setup(&pro, now, output) == 1 && output[11] == 0x10 && output[12] == 0x80 && output[15] == 22);
+    switch_reply(report, 0x10);
+    report[13] = 0x90; report[15] = 0x10; report[16] = 0x80; report[19] = 22;
+    report[20] = 0xb2; report[21] = 0xa1;
+    pack_stick(report + 22, 1300, 1200);
+    pack_stick(report + 25, 2300, 2400);
+    pack_stick(report + 28, 1000, 900);
+    report[31] = 0xb2; report[32] = 0xa1; /* Invalid user right: keep factory data. */
+    memset(report + 33, 255, 9);
+    assert(switch_pro_receive(&pro, report, 49, &state) == 0 && pro.step == SWITCH_PRO_LIGHTS);
+    assert(pro.axis[0].center == 2300 && pro.axis[1].above == 1200 && pro.axis[2].center == 2000);
+    now += 100000;
+    assert(switch_pro_setup(&pro, now, output) == 1 && output[10] == 0x30 && output[11] == 1);
+    switch_reply(report, 0x30);
+    assert(switch_pro_receive(&pro, report, 49, &state) == 0 && pro.step == SWITCH_PRO_DONE);
+    assert(!switch_pro_setup(&pro, now + 100000, output));
+    memset(report, 0, sizeof(report)); report[0] = 0x30;
+    pack_stick(report + 6, 2300, 2400); pack_stick(report + 9, 2000, 1900);
+    assert(switch_pro_receive(&pro, report, 49, &state) == 1);
+    assert(state.lx == 128 && state.ly == 128 && state.rx == 128 && state.ry == 128);
+    pack_stick(report + 6, 1300, 3600); pack_stick(report + 9, 3200, 1300);
+    assert(switch_pro_receive(&pro, report, 49, &state) == 1);
+    assert(state.lx == 0 && state.ly == 0 && state.rx == 255 && state.ry == 255);
+
+    for (i = 0; i < 3; ++i) assert(switch_pro_setup(&missing, i * 100000, output));
+    assert(!switch_pro_setup(&missing, 300000, output)); /* Bounded mode retries. */
+    report[0] = 0x30;
+    assert(switch_pro_receive(&missing, report, 49, &state) == 1);
+    missing.sequence = 15;
+    for (i = 0; i < 9; ++i) { /* Missing optional ACKs still finish setup. */
+        assert(switch_pro_setup(&missing, 300000 + i * 100000, output));
+        assert(output[1] == ((15 + i) & 15));
+    }
+    assert(!switch_pro_setup(&missing, 1200000, output) && missing.step == SWITCH_PRO_DONE);
+
+    set_name(info, "Pro Controller"); info[72] = 2; info[73] = 4;
+    assert(gobt_controller_model(info, 80, 80) == GOBT_MODEL_SWITCH_PRO);
+    assert(!gobt_controller_model(info, 79, 80) && !gobt_controller_model(info, 80, 4));
+    assert(gobt_input_metadata(info, 80));
+    assert(gobt_input_identity(info, 80, 0x057e, 0x2009));
+    assert(!gobt_input_identity(info, 80, 0x054c, 0x2009));
+    assert(!gobt_input_identity(info, 80, 0x057e, 0x2006)); /* Joy-Con is a different device. */
+    assert(gobt_input_identity_policy(info, 80, 0x802f0153u, 0, 0, 2) == 2);
+    assert(!gobt_input_identity_policy(info, 80, 0x802f0153u, 0, 0, 0));
+    assert(gobt_route_hid_record(profile, sizeof(profile), info, 80) && profile[4] == 9);
+    info[72] = 0;
+    assert(!gobt_input_metadata(info, 80) && !gobt_route_hid_record(profile, sizeof(profile), info, 80));
+    set_name(scan, "Pro Controller");
+    assert(gobt_pair_scan_record(scan, 84));
+    set_name(scan, "Pro Controller X");
+    assert(!gobt_pair_scan_record(scan, 84));
+    set_name(scan, "Joy-Con (L)");
+    assert(!gobt_pair_scan_record(scan, 84));
+    assert(gobt_target_remember_model(&cache, address, GOBT_MODEL_SWITCH_PRO) == 1);
+    assert(!gobt_target_encode(&cache, config) && !gobt_target_decode(&restored, config, 32));
+    assert(gobt_target_model(&restored, address) == GOBT_MODEL_SWITCH_PRO);
 }
 
 static void test_dualshock4(void)
@@ -912,7 +1057,7 @@ static void test_target_cache(void)
     assert(!gobt_target_contains(&restored, second));
     assert(gobt_target_model(&restored, third) == GOBT_MODEL_DUALSENSE);
     assert(gobt_target_model(&restored, first) == GOBT_MODEL_DUALSENSE);
-    bytes[6] = 3; /* invalid model with a valid checksum */
+    bytes[6] = 4; /* invalid model with a valid checksum */
     put_word(bytes, 28, ds_crc32(0, bytes, 28));
     assert(gobt_target_decode(&restored, bytes, sizeof(bytes)) < 0 && !restored.count);
     bytes[4] = 1; bytes[6] = bytes[7] = 0;
@@ -926,6 +1071,7 @@ static void test_target_cache(void)
 
 int main(void)
 {
+    test_switch_pro();
     test_dualshock4();
     test_target_cache();
     test_hid_reset_guard();

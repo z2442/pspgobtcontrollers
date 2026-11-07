@@ -155,7 +155,7 @@ int pspgobtTraceConnect(unsigned int device, int mode)
         pspSdkSetK1(k1);
     }
     /* Incoming connections need no call here. This XMB request uses generic
-     * HID for a classified DualSense; other devices keep the supplied mode. */
+     * HID for a supported controller; other devices keep the supplied mode. */
     result = original(device, mode);
     gobt_session_trace(GOBT_TRACE_CONNECT_DONE, device, result, mode, selected);
     finish(CONNECT, event, result);

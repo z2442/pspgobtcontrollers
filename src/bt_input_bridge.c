@@ -14,6 +14,7 @@
 #include "probe_log.h"
 #include "report_bridge.h"
 #include "target_cache.h"
+#include "switch_pro.h"
 
 typedef int (*ReadCallback)(int, int, void *);
 typedef int (*ReadSubmit)(unsigned, void *, unsigned, ReadCallback, void *);
@@ -30,6 +31,7 @@ typedef struct {
     unsigned generation, checked, accepted, good, bad, initialized, attempts;
     uint64_t previous, assembly_started, retry_after;
     GoBtReportAssembly assembly;
+    SwitchPro pro;
 } InputSource;
 
 static ReadSubmit original_submit;
@@ -524,13 +526,10 @@ int gobt_input_bridge_prepare(unsigned device)
     gobt_session_trace(GOBT_TRACE_PREPARED, device, result, selected, cached);
 #if PSPGOBT_DEBUG
     {
-        static const char prefix[] = "DualSense";
         const u16 *record = (const u16 *)info;
         DebugDevice *debug = &debug_devices[device];
-        unsigned i, name_matches = 1;
-        for (i = 0; i < sizeof(prefix) - 1; ++i)
-            if (record[3 + i] != (unsigned char)prefix[i]) name_matches = 0;
-        if (record[12] && record[12] != ' ') name_matches = 0;
+        unsigned name_matches = cached ? device_models[device] != GOBT_MODEL_NONE :
+                                gobt_controller_model((const uint8_t *)info, 80, 80) != GOBT_MODEL_NONE;
         debug->seen = 1;
         debug->info_result = result;
         debug->caps = cached ? 0x0402 : record[36];
@@ -570,7 +569,7 @@ static unsigned native_setup_flags(unsigned device)
     unsigned epoch = power_generation;
     unsigned flags = connection_flags(device);
     /* Keep the real link state intact. Only the local HID constructor's
-     * branch selection changes for an already selected, connected DualSense. */
+     * branch selection changes for a selected, connected controller. */
     if (installed && !suspended && device >= 1 && device <= 8 &&
         (prepared_devices & (1u << device)) && (flags & 2) &&
         epoch == power_generation)
@@ -592,13 +591,13 @@ static int trace_native_identity(unsigned device, void *vendor, void *product, v
         !(((uintptr_t)vendor | (uintptr_t)product) & 1)) {
         /* This one internal setup call only distinguishes native DS3 IDs.
          * The caller ignores its return and compares these two words. Avoid
-         * remote DID discovery entirely for our prepared DualSense path;
+         * remote DID discovery entirely for our prepared controller path;
          * zero means unknown, preventing entry into Sony's DS3-only setup.
          * -1 explicitly means not queried here, not a firmware error result.
          * Public DID APIs and all other devices retain their original calls. */
         *(u16 *)vendor = 0;
         *(u16 *)product = 0;
-        if (event) gobt_log("bt-input native DID skipped device=%u source=%u event=%u; prepared Sony controller, IDs unknown\n",
+        if (event) gobt_log("bt-input native DID skipped device=%u source=%u event=%u; prepared controller, IDs unknown\n",
                             device, i, event);
         pspSdkSetK1(k1);
         return -1;
@@ -628,9 +627,9 @@ static __attribute__((noipa)) int register_hid_service(void *descriptor)
                         device, index, bypass != 0, event);
     pspSdkSetK1(k1);
     /* The native service performs synchronous DID/descriptor discovery before
-     * the first CDC read. Our worker already parses DualSense reports and
+     * the first CDC read. Our worker already parses supported reports and
      * feeds the external controller port. Skip only that service registration
-     * for a connected, preselected DualSense; retain native buffer allocation,
+     * for a connected, preselected controller; retain native buffer allocation,
      * read submission, callback, queues, and teardown. Input acceptance still
      * requires the separate connected-source selection in identify(). */
     result = bypass ? 0 : native_register(descriptor);
@@ -991,21 +990,37 @@ static void initialize(unsigned index, unsigned device, InputSource *source)
     unsigned generation = generations[index];
     unsigned channel = *(const u32 *)contexts[index];
     unsigned timeout = 200000;
+    unsigned size = 79;
     int result;
-    if ((source->initialized && last_report[index]) || !source->accepted || !device_models[device] ||
+    if (device < 1 || device > 8 || !source->accepted || !device_models[device] ||
         !reads_ready[index] || suspended || quiescing || session_closing(device) ||
-        source->attempts >= 3 || (uint64_t)sceKernelGetSystemTimeWide() < source->retry_after ||
         channel < 1 || channel > 4 || ((const u16 *)contexts[index])[2] != device ||
         !(connection_flags(device) & 2)) return;
+    if (device_models[device] != GOBT_MODEL_SWITCH_PRO &&
+        ((source->initialized && last_report[index]) || source->attempts >= 3 ||
+         (uint64_t)sceKernelGetSystemTimeWide() < source->retry_after)) return;
     if (!stream_started[index]) stream_started[index] = sceKernelGetSystemTimeWide();
-    ++source->attempts;
     memset(output, 0, sizeof(output));
     output[0] = 0xa2;
-    if (device_models[device] == GOBT_MODEL_DUALSHOCK4) ds4_build_enable(output + 1);
-    else ds_build_enable(output + 1, (uint8_t)(source->attempts - 1));
-    gobt_session_trace(GOBT_TRACE_INIT, device, index, generation, source->attempts);
-    result = write_hid(channel, output, 79, &timeout);
+    if (device_models[device] == GOBT_MODEL_SWITCH_PRO) {
+        int send = switch_pro_setup(&source->pro, sceKernelGetSystemTimeWide(), output + 1);
+        source->initialized = source->pro.streaming && source->pro.step == SWITCH_PRO_DONE;
+        if (!send) return;
+        size = SWITCH_PRO_REPORT_SIZE + 1;
+    } else {
+        ++source->attempts;
+        if (device_models[device] == GOBT_MODEL_DUALSHOCK4) ds4_build_enable(output + 1);
+        else ds_build_enable(output + 1, (uint8_t)(source->attempts - 1));
+    }
+    gobt_session_trace(GOBT_TRACE_INIT, device, index, generation,
+                       device_models[device] == GOBT_MODEL_SWITCH_PRO ? source->pro.attempts : source->attempts);
+    result = write_hid(channel, output, size, &timeout);
     gobt_session_trace(GOBT_TRACE_INIT_DONE, device, (unsigned)result, generation, generations[index]);
+    if (device_models[device] == GOBT_MODEL_SWITCH_PRO) {
+        gobt_log("bt-input Switch Pro init device=%u source=%u step=%u attempt=%u result=%08X\n",
+                 device, index, source->pro.step, source->pro.attempts, (unsigned)result);
+        return; /* A completed write alone does not confirm report mode. */
+    }
     if (result == 79 && generations[index] == generation && !session_closing(device)) {
         source->initialized = 1;
         /* Transport completion is not confirmation of usable input. A
@@ -1014,6 +1029,16 @@ static void initialize(unsigned index, unsigned device, InputSource *source)
     } else source->retry_after = sceKernelGetSystemTimeWide() + 200000;
     gobt_log("bt-input init device=%u source=%u channel=%u bytes=79 result=%08X generation=%u attempt=%u\n",
              device, index, channel, (unsigned)result, generation, source->attempts);
+}
+
+static int decode_input(InputSource *source, const ReceivedPacket *packet, DsState *state)
+{
+    if (device_models[packet->device] == GOBT_MODEL_SWITCH_PRO) {
+        source->assembly.used = 0;
+        if (packet->size < 2 || packet->bytes[0] != 0xa1) return -1;
+        return switch_pro_receive(&source->pro, packet->bytes + 1, packet->size - 1, state);
+    }
+    return gobt_decode_hidp(&source->assembly, packet->bytes, packet->size, state);
 }
 
 static __attribute__((noipa)) void connected(unsigned device, int checked)
@@ -1285,7 +1310,7 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
         DsState state;
         if (!source->assembly.used || packet->bytes[0] == 0xa1)
             source->assembly_started = packet->received;
-        int result = gobt_decode_hidp(&source->assembly, packet->bytes, packet->size, &state);
+        int result = decode_input(source, packet, &state);
         if (result == 1) {
             if (!device_models[packet->device]) {
                 unsigned report_id = packet->bytes[0] == 0xa1 && packet->size >= 2 ?
@@ -1327,7 +1352,11 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
             initialize(packet->source, packet->device, source);
             return;
         }
-        if (result == 0) return;
+        if (result == 0) {
+            if (device_models[packet->device] == GOBT_MODEL_SWITCH_PRO)
+                initialize(packet->source, packet->device, source);
+            return;
+        }
     }
     if (++source->bad <= 8)
         gobt_log("bt-input unhandled source=%u bytes=%u header=%02X report=%02X\n",
@@ -1355,6 +1384,10 @@ void gobt_input_bridge_sample(void)
             packet->generation != generations[packet->source] ||
             source->generation != packet->generation || !source->accepted ||
             !source->initialized || !source->good) break;
+        /* Setup replies belong to the worker, which may issue the next
+         * command. The native sampler only consumes established controls. */
+        if (device_models[packet->device] == GOBT_MODEL_SWITCH_PRO &&
+            (packet->size < 2 || packet->bytes[0] != 0xa1 || packet->bytes[1] != 0x30)) break;
         now = sceKernelGetSystemTimeWide();
         if (now < packet->received || now - packet->received >= GOBT_INPUT_TIMEOUT_US) {
             source->assembly.used = 0;
@@ -1365,7 +1398,7 @@ void gobt_input_bridge_sample(void)
             source->previous = packet->received;
             if (!source->assembly.used || packet->bytes[0] == 0xa1)
                 source->assembly_started = packet->received;
-            result = gobt_decode_hidp(&source->assembly, packet->bytes, packet->size, &state);
+            result = decode_input(source, packet, &state);
             if (result == 1) {
                 now = sceKernelGetSystemTimeWide();
                 if (now >= packet->received && now - packet->received < GOBT_INPUT_TIMEOUT_US) {

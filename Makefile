@@ -18,19 +18,19 @@ HOST_CFLAGS := -std=c99 -O2 -Wall -Wextra -Werror -pedantic
 .PHONY: test test-mips test-bridge-mips package protocol
 test:
 	mkdir -p build
-	$(HOST_CC) $(HOST_CFLAGS) -Iinclude tests/test_core.c src/dualsense.c src/input_state.c src/xmb_patch.c src/probe_policy.c src/hid_route.c src/pairing_route.c src/report_bridge.c src/target_cache.c -o build/test_core
+	$(HOST_CC) $(HOST_CFLAGS) -Iinclude tests/test_core.c src/dualsense.c src/switch_pro.c src/input_state.c src/xmb_patch.c src/probe_policy.c src/hid_route.c src/pairing_route.c src/report_bridge.c src/target_cache.c -o build/test_core
 	./build/test_core
 	python3 tests/test_inspect.py
 
 test-mips:
 	mkdir -p build
-	$(HOST_CC) $(HOST_CFLAGS) -shared -fPIC -Iinclude src/hid_route.c src/pairing_route.c src/report_bridge.c src/dualsense.c -o build/libhidroute_host.so
+	$(HOST_CC) $(HOST_CFLAGS) -shared -fPIC -Iinclude src/hid_route.c src/pairing_route.c src/report_bridge.c src/dualsense.c src/switch_pro.c -o build/libhidroute_host.so
 	python3 tests/test_route_emulation.py
 	python3 tests/test_hid_mode_execution.py
 
 ifeq ($(strip $(filter test test-mips,$(MAKECMDGOALS))),)
 TARGET = pspgobt_probe
-OBJS = src/plugin.o src/xmb_patch.o src/dualsense.o src/input_state.o src/native_sink.o src/probe_policy.o src/bsman_trace.o src/hid_route.o src/xmb_hid_route.o src/pairing_route.o src/xmb_pair_route.o src/pair_command_trace.o src/report_bridge.o src/bt_input_bridge.o src/target_cache.o src/session_trace.o
+OBJS = src/plugin.o src/xmb_patch.o src/dualsense.o src/switch_pro.o src/input_state.o src/native_sink.o src/probe_policy.o src/bsman_trace.o src/hid_route.o src/xmb_hid_route.o src/pairing_route.o src/xmb_pair_route.o src/pair_command_trace.o src/report_bridge.o src/bt_input_bridge.o src/target_cache.o src/session_trace.o
 INCDIR = include
 DEPFLAGS = -MMD -MP
 CFLAGS = -std=gnu99 -Os -G0 -Wall -Wextra -Werror -fno-pic
@@ -64,6 +64,7 @@ test-bridge-mips: all
 	python3 tests/test_install_execution.py
 	python3 tests/test_transport_rebind_execution.py
 	python3 tests/test_controller_execution.py
+	python3 tests/test_switch_pro_execution.py
 	python3 tests/test_shutdown_execution.py
 	python3 tests/test_session_execution.py
 	python3 tests/test_hid_mode_kernel_execution.py
@@ -75,11 +76,11 @@ test-bridge-mips: all
 
 protocol: build/libpspgobt_protocol.a
 
-build/libpspgobt_protocol.a: src/dualsense.o src/input_state.o
+build/libpspgobt_protocol.a: src/dualsense.o src/switch_pro.o src/input_state.o
 	mkdir -p build
 	psp-ar rcs $@ $^
 
-EXTRA_CLEAN += build/libpspgobt_protocol.a src/dualsense.o build/.pspgobt-debug-0 build/.pspgobt-debug-1 build/.pspgobt-profile-*
+EXTRA_CLEAN += build/libpspgobt_protocol.a src/dualsense.o src/switch_pro.o build/.pspgobt-debug-0 build/.pspgobt-debug-1 build/.pspgobt-profile-*
 -include $(OBJS:.o=.d)
 
 package: all
@@ -117,5 +118,6 @@ package: all
 	cp docs/performance-v028.md dist/docs/
 	cp docs/input-latency.md dist/docs/
 	cp docs/reconnect-input.md dist/docs/
+	cp docs/switch-pro.md dist/docs/
 	python3 tools/package.py --debug $(PSPGOBT_DEBUG) --session-trace $(PSPGOBT_SESSION_TRACE)
 endif

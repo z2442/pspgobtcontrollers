@@ -32,7 +32,7 @@ unsigned gobt_target_model(const GoBtTargetCache *cache, const uint8_t address[6
 int gobt_target_remember_model(GoBtTargetCache *cache, const uint8_t address[6], unsigned model)
 {
     unsigned index;
-    if (!cache || cache->count > 2 || !valid_address(address) || model > GOBT_MODEL_DUALSHOCK4) return -1;
+    if (!cache || cache->count > 2 || !valid_address(address) || model > GOBT_MODEL_SWITCH_PRO) return -1;
     for (index = 0; index < cache->count; ++index)
         if (!memcmp(cache->address[index], address, 6)) {
             if (!model || cache->model[index] == model) return 0;
@@ -61,7 +61,7 @@ int gobt_target_encode(const GoBtTargetCache *cache, uint8_t bytes[GOBT_TARGET_C
     uint32_t crc;
     if (!cache || !bytes || cache->count > 2) return -1;
     for (i = 0; i < cache->count; ++i)
-        if (!valid_address(cache->address[i]) || cache->model[i] > GOBT_MODEL_DUALSHOCK4) return -1;
+        if (!valid_address(cache->address[i]) || cache->model[i] > GOBT_MODEL_SWITCH_PRO) return -1;
     if (cache->count == 2 && !memcmp(cache->address[0], cache->address[1], 6)) return -1;
     memset(bytes, 0, GOBT_TARGET_CACHE_BYTES);
     memcpy(bytes, "GBTC", 4);
@@ -83,7 +83,7 @@ int gobt_target_decode(GoBtTargetCache *cache, const uint8_t *bytes, size_t size
     if (!bytes || size != GOBT_TARGET_CACHE_BYTES || memcmp(bytes, "GBTC", 4) ||
         (bytes[4] != 1 && bytes[4] != 2) || bytes[5] > 2) return -1;
     for (i = 0; i < 2; ++i)
-        if (bytes[6 + i] > GOBT_MODEL_DUALSHOCK4 ||
+        if (bytes[6 + i] > GOBT_MODEL_SWITCH_PRO ||
             ((bytes[4] == 1 || i >= bytes[5]) && bytes[6 + i])) return -1;
     for (i = 8 + bytes[5] * 6; i < 28; ++i) if (bytes[i]) return -1;
     for (i = 0; i < 4; ++i) crc |= (uint32_t)bytes[28 + i] << (8 * i);

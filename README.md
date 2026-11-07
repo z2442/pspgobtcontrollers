@@ -1,23 +1,26 @@
 # PSPGoBT
 
-Use a **DualSense or DualShock 4 controller with the PSP Go's built-in Bluetooth**. PSPGoBT
+Use a **DualSense, DualShock 4, or Nintendo Switch Pro Controller with the PSP Go's built-in Bluetooth**. PSPGoBT
 pairs through the PSP's Bluetooth settings and sends controller input through
 the native DualShock 3 external controller interface.
 
 **Current release: v1.0 supports DualSense.** Build this source for DualShock 4
-support until a new release is published. See the [release notes](CHANGELOG.md).
+or experimental Nintendo Switch Pro Controller support until a new release is
+published. See the [release notes](CHANGELOG.md).
 
 ## Requirements
 
 - PSP Go / 05g.
 - ARK-5 custom firmware, with underlying Sony firmware 6.60 or 6.61.
-- A DualSense or Sony DualShock 4 controller.
+- A DualSense, Sony DualShock 4, or original Nintendo Switch Pro Controller.
 
 The DualSense setup has been confirmed on a PSP Go running ARK-5 / 6.60,
 including reconnects, XMB/game transitions, and the input performance changes.
 The patches also target 6.61; hardware verification is limited to the reported
-6.60 setup. DualShock 4 support in source builds has passed host protocol tests
-and a PSP toolchain build, but still needs a live PSP Go test.
+6.60 setup. DualShock 4 and Switch Pro support in source builds have passed host
+protocol tests, emulated bridge tests, and a PSP toolchain build, but still need
+live PSP Go tests. Switch Pro pairing and reconnect behavior remain experimental;
+Joy-Con, Switch 2 Pro, and third-party Switch controllers are not supported.
 
 ## Installation
 
@@ -31,8 +34,9 @@ and a PSP toolchain build, but still needs a live PSP Go test.
 
 4. Restart the PSP.
 5. Put the controller into pairing mode: hold **Create + PS** on DualSense, or
-   **Share + PS** on DualShock 4, until its light flashes. Register it in the
-   PSP's **Bluetooth Device Settings**.
+   **Share + PS** on DualShock 4, until its light flashes. For Switch Pro, hold
+   the small **SYNC** button beside the USB-C port until the player lights
+   cycle. Register it in the PSP's **Bluetooth Device Settings**.
 
 The controller should appear as a **HID** device. Keep the `always` entry so the
 plugin loads in the XMB, games, and applications.
@@ -47,6 +51,12 @@ Leave development markers such as `enable-filter`, `enable-input`, and
 - D-pad, face buttons, sticks, shoulders, and triggers are forwarded through the
   native DS3 input interface. PSP games use the PSP's native controller mapping.
 - **Create/Share** maps to Select, **Options** to Start, and **PS** to the native PS button.
+- On Switch Pro, **Minus / Plus / Home** map to Select / Start / PS.
+  Face buttons follow their positions: **B → Cross**, **A → Circle**,
+  **X → Triangle**, **Y → Square**. L/R map to L1/R1; digital ZL/ZR map to
+  L2/R2 with released/pressed pressure values. Stick clicks map to L3/R3.
+  Factory stick calibration is read on connection and valid user calibration
+  takes precedence. Player 1's light is enabled. See [Switch Pro support](docs/switch-pro.md).
 - Input processing wakes on received data, with bounded batches to give games
   CPU time. Source builds also let the native sampler decode queued input from
   an established stream immediately, without another worker pass. The plugin
@@ -62,7 +72,7 @@ with no link keys or input history. Existing configurations are upgraded after
 a successful model lookup. See [reconnect input setup](docs/reconnect-input.md).
 
 Touchpad, microphone, motion, haptics, adaptive triggers, battery reporting,
-Edge-specific controls, and USB input are not implemented.
+Edge-specific controls, the Switch Capture button, and USB input are not implemented.
 
 ## Troubleshooting
 

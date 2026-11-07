@@ -122,7 +122,7 @@ int gobt_install_hid_route(SceModule *module, unsigned long firmware)
     sceKernelCpuResumeIntr(interrupts);
     sceKernelDcacheWritebackInvalidateAll();
     sceKernelIcacheInvalidateAll();
-    gobt_log("xmb-hid-route installed site=%08lX trampoline=%08lX; DualSense name/type/capability guards active\n",
+    gobt_log("xmb-hid-route installed site=%08lX trampoline=%08lX; supported controller name/type/capability guards active\n",
              call_site, (u32)code);
     return 0;
 }
