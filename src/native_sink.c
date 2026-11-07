@@ -5,10 +5,13 @@
 #include <pspctrl.h>
 #include <pspintrman_kernel.h>
 #include <pspsysevent.h>
+#include <psppower.h>
 #include <systemctrl.h>
+#include <string.h>
 #include "input_state.h"
 #include "native_sink.h"
 #include "bt_input_bridge.h"
+#include "ctrl_read.h"
 
 typedef struct {
     int size;
@@ -21,12 +24,13 @@ static GoBtInput input;
 static int ready, suspended, test_enabled;
 static int shutting_down;
 static SceUID test_thread_id = -1;
-static uint64_t next_restore;
+static uint64_t next_restore, next_idle_tick;
 
 void pspgobtDisconnect(void)
 {
     int interrupts = sceKernelCpuSuspendIntr();
     gobt_input_reset(&input);
+    gobt_ctrl_read_release();
     next_restore = 0;
     sceKernelCpuResumeIntr(interrupts);
 }
@@ -47,12 +51,24 @@ int gobt_sink_submit_state(const DsState *state)
     if (!state || !ready || suspended || shutting_down) return -1;
     interrupts = sceKernelCpuSuspendIntr();
     /* Recheck after parsing in case a power event cleared the session. */
-    if (!suspended)
+    if (!suspended) {
         gobt_input_update(&input, state, sceKernelGetSystemTimeWide());
-    else
+        gobt_ctrl_read_update(state);
+    } else
         result = -1;
     sceKernelCpuResumeIntr(interrupts);
     return result;
+}
+
+int gobt_sink_snapshot(GoBtCtrlData2 *destination)
+{
+    int interrupts = sceKernelCpuSuspendIntr();
+    int fresh;
+    gobt_input_bridge_sample();
+    fresh = gobt_input_sample(&input, sceKernelGetSystemTimeWide(), destination);
+    if (!fresh) gobt_ctrl_read_release();
+    sceKernelCpuResumeIntr(interrupts);
+    return fresh;
 }
 
 static int copy_input(void *source, GoBtCtrlData2 *destination)
@@ -60,8 +76,17 @@ static int copy_input(void *source, GoBtCtrlData2 *destination)
     int interrupts = sceKernelCpuSuspendIntr();
     int fresh;
     (void)source;
-    gobt_input_bridge_sample();
-    fresh = gobt_input_sample(&input, sceKernelGetSystemTimeWide(), destination);
+    fresh = gobt_sink_snapshot(destination);
+    if (gobt_ctrl_read_active()) {
+        /* Game controls are merged at read time. Feed only PS through the
+         * sampler so an older remote press/stick cannot linger in its ring. */
+        uint32_t ps = destination->buttons & 0x10000u;
+        uint32_t timestamp = destination->timestamp;
+        memset(destination, 0, sizeof(*destination));
+        destination->timestamp = timestamp; destination->buttons = ps;
+        destination->lx = destination->ly = destination->rx = destination->ry = 128;
+        destination->reserved[0] = destination->reserved[1] = 128;
+    }
     sceKernelCpuResumeIntr(interrupts);
     return fresh ? 0 : -1;
 }
@@ -77,6 +102,7 @@ static int power_event(int event, char *name, void *parameter, int *result)
         int interrupts = sceKernelCpuSuspendIntr();
         suspended = event != 0x400000;
         gobt_input_reset(&input);
+        gobt_ctrl_read_release();
         next_restore = 0;
         sceKernelCpuResumeIntr(interrupts);
     }
@@ -120,12 +146,22 @@ void gobt_sink_maintain(void)
 {
     uint64_t now = sceKernelGetSystemTimeWide();
     int interrupts = sceKernelCpuSuspendIntr();
-    int restore = ready && !suspended && input.valid &&
+    int fresh = ready && !suspended && input.valid &&
                   now >= input.received_us &&
-                  now - input.received_us < GOBT_INPUT_TIMEOUT_US &&
-                  now >= next_restore;
+                  now - input.received_us < GOBT_INPUT_TIMEOUT_US;
+    int restore = fresh && now >= next_restore;
+    int active = (input.state.buttons & 0x1ffffu) ||
+                 input.state.lx <= 90 || input.state.lx >= 166 ||
+                 input.state.ly <= 90 || input.state.ly >= 166 ||
+                 input.state.rx <= 90 || input.state.rx >= 166 ||
+                 input.state.ry <= 90 || input.state.ry >= 166;
+    int tick = fresh && active && gobt_ctrl_read_active() && now >= next_idle_tick;
     if (restore) next_restore = now + 100000;
+    if (tick) next_idle_tick = now + 1000000;
     sceKernelCpuResumeIntr(interrupts);
+    /* Game controls bypass native sampling in read-time mode. Keep normal
+     * active-play power behavior without ticking from a read/IRQ callback. */
+    if (tick) scePowerTick(PSP_POWER_TICK_ALL);
     /* popsman and other startup code may reset the driver after our initial
      * registration. Resolve again so driver replacement also gets a fresh
      * handler and mask; keep this work outside the sampling callback. */
@@ -151,10 +187,12 @@ int gobt_sink_start(int test_mode)
          * each new accepted input session without registering power twice. */
         result = register_input(1, &handler, &input);
         if (result < 0) return result;
+        if (!test_mode) gobt_ctrl_read_install((uintptr_t)register_input, &handler, &input);
         passthrough(1);
         return 1;
     }
     gobt_input_reset(&input);
+    gobt_ctrl_read_release();
     result = sceKernelRegisterSysEventHandler(&power_handler);
     if (result < 0) return result;
     /* Create the test thread before claiming the port; start it only after
@@ -174,6 +212,7 @@ int gobt_sink_start(int test_mode)
         sceKernelUnregisterSysEventHandler(&power_handler);
         return result;
     }
+    if (!test_mode) gobt_ctrl_read_install((uintptr_t)register_input, &handler, &input);
     passthrough(1);
     ready = 1;
     next_restore = sceKernelGetSystemTimeWide() + 100000;
@@ -201,12 +240,14 @@ void gobt_sink_shutdown(void)
     shutting_down = 1;
     ready = test_enabled = 0;
     gobt_input_reset(&input);
+    gobt_ctrl_read_release();
     sceKernelCpuResumeIntr(interrupts);
     if (!was_ready) return;
     register_input = (RegisterInput)sctrlHENFindFunction(
         "sceController_Service", "sceCtrl_driver", 0xe467bec8);
     passthrough = (SetPassthrough)sctrlHENFindFunction(
         "sceController_Service", "sceCtrl_driver", 0x6c86af22);
+    gobt_ctrl_read_shutdown((uintptr_t)register_input);
     registration = (const u32 *)register_input;
     setter = (const u32 *)passthrough;
     /* Decode the captured 6.6x accessors before checking retained pointers.

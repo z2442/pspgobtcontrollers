@@ -4,7 +4,7 @@
 int gobt_install_input_bridge(SceModule *module, unsigned long firmware);
 /* Starts the resident retry worker even when Bluetooth providers load later. */
 int gobt_start_input_bridge(unsigned long firmware);
-/* Native sampler: bounded decoding of an already selected, initialized stream.
+/* Native sampling/read callbacks: bounded decoding of an established stream.
  * Never performs setup, provider calls, logging, or waits. */
 void gobt_input_bridge_sample(void);
 /* Kernel reboot callbacks: request cooperative retirement; wait only in the

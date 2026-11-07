@@ -1,5 +1,9 @@
 # Unreleased
 
+- Merge current controller state into native buffer/latch reads so presses
+  and releases can reach a game without another native sample. Keep remote
+  game controls out of the sampler's cached frames while these hooks are
+  active; retain native PS handling, physical PSP controls and button masks.
 - Add experimental original Nintendo Switch Pro Controller Bluetooth support:
   guarded model selection and pairing routes, regular report-mode setup,
   positional face-button mapping, digital triggers, calibrated sticks,

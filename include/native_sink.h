@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "dualsense.h"
+#include "input_state.h"
 
 /* Explicitly claims native DS3 port 1. Resident until reboot. test_mode runs
  * the local-analog-to-D-pad test; otherwise a transport must submit reports. */
@@ -13,6 +14,8 @@ void gobt_sink_maintain(void);
 void gobt_sink_shutdown(void);
 /* Internal, already decoded/selected transport path; not a user export. */
 int gobt_sink_submit_state(const DsState *state);
+/* Read hook: refresh established queued input and return the latest frame. */
+int gobt_sink_snapshot(GoBtCtrlData2 *frame);
 /* Kernel-only transport boundary. Caller must have authenticated and selected
  * a DualSense; CRC and report shape do not establish device identity. */
 int pspgobtSubmitReport(const uint8_t *report, size_t size);

@@ -30,7 +30,7 @@ test-mips:
 
 ifeq ($(strip $(filter test test-mips,$(MAKECMDGOALS))),)
 TARGET = pspgobt_probe
-OBJS = src/plugin.o src/xmb_patch.o src/dualsense.o src/switch_pro.o src/input_state.o src/native_sink.o src/probe_policy.o src/bsman_trace.o src/hid_route.o src/xmb_hid_route.o src/pairing_route.o src/xmb_pair_route.o src/pair_command_trace.o src/report_bridge.o src/bt_input_bridge.o src/target_cache.o src/session_trace.o
+OBJS = src/plugin.o src/xmb_patch.o src/dualsense.o src/switch_pro.o src/input_state.o src/native_sink.o src/ctrl_read.o src/probe_policy.o src/bsman_trace.o src/hid_route.o src/xmb_hid_route.o src/pairing_route.o src/xmb_pair_route.o src/pair_command_trace.o src/report_bridge.o src/bt_input_bridge.o src/target_cache.o src/session_trace.o
 INCDIR = include
 DEPFLAGS = -MMD -MP
 CFLAGS = -std=gnu99 -Os -G0 -Wall -Wextra -Werror -fno-pic
@@ -41,7 +41,7 @@ PRX_EXPORTS = exports.exp
 USE_KERNEL_LIBS = 1
 USE_KERNEL_LIBC = 1
 LDFLAGS = -nostartfiles
-LIBS = -lpspsystemctrl_kernel
+LIBS = -lpspsystemctrl_kernel -lpsppower_driver
 PSPSDK := $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
 
@@ -64,6 +64,7 @@ test-bridge-mips: all
 	python3 tests/test_install_execution.py
 	python3 tests/test_transport_rebind_execution.py
 	python3 tests/test_controller_execution.py
+	python3 tests/test_ctrl_read_execution.py
 	python3 tests/test_switch_pro_execution.py
 	python3 tests/test_shutdown_execution.py
 	python3 tests/test_session_execution.py

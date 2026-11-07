@@ -1370,7 +1370,7 @@ void gobt_input_bridge_sample(void)
     unsigned processed = 0;
     int interrupts = sceKernelCpuSuspendIntr();
     /* The worker owns selection, initialization and lifecycle changes. The
-     * sampler may drain only a stable stream while that worker is asleep.
+     * sampler/read hook may drain a stable stream outside worker mutations.
      * This also prevents reentering fragment assembly mid-worker decode. */
     while (installed && !binding && !worker_busy && !suspended && !quiescing &&
            queued && processed < 16) {
@@ -1660,9 +1660,11 @@ static int worker(SceSize args, void *argp)
                 if (sources[device].generation == generations[device])
                     initialize(device, ((const u16 *)contexts[device])[2], &sources[device]);
         }
+        worker_busy = 0;
+        /* Source mutation is finished. Reads may consume established input
+         * while port maintenance or configuration I/O runs on this thread. */
         gobt_sink_maintain();
         save_target_cache();
-        worker_busy = 0;
         /* Keep native callback threads and games runnable even under a
          * continuous report flood. Normal traffic sleeps until notified;
          * provider lookup and maintenance run once per batch, not report. */

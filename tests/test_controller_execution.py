@@ -10,7 +10,7 @@ from test_bridge_execution import machine, SYMBOLS
 
 
 class ControllerSampler(unittest.TestCase):
-    def exercise(self, game, foreign=False, changed_signature=False):
+    def exercise(self, game, foreign=False, changed_signature=False, check=None):
         uid, base = ("018CC807", 0x880E6700) if game else ("018B8117", 0x880E6200)
         path = Path(f"pspgobt/sceController_Service-{uid}.text.bin")
         if not path.exists():
@@ -36,6 +36,15 @@ class ControllerSampler(unittest.TestCase):
         put(state + 0x304, 0x0A600200)
 
         def observe(m, address, _, __):
+            # Test ELF trampolines are linked at zero; real PSP plugin code
+            # and the captured driver both execute in KSEG0. Restore that
+            # alias when a test trampoline jumps back into Sony's image.
+            if physical(base) <= address < physical(base) + 0x2800:
+                m.reg_write(reg.UC_MIPS_REG_PC, address | 0x80000000)
+                return
+            if 0x80000000 <= address < 0x80010000:
+                m.reg_write(reg.UC_MIPS_REG_PC, address & 0x1FFFFFFF)
+                return
             # Unicorn lacks Allegrex MIN/MAX. A MIN in a REGIMM delay slot
             # requires emulating the branch and slot together, before entry.
             instruction = struct.unpack("<I", m.mem_read(physical(address), 4))[0]
@@ -61,7 +70,10 @@ class ControllerSampler(unittest.TestCase):
                        SYMBOLS["sceKernelCpuResumeIntr"]: 0,
                        SYMBOLS["sceKernelGetSystemTimeWide"]: clock[0],
                        SYMBOLS["sceKernelRegisterSysEventHandler"]: 0,
-                       SYMBOLS["sceKernelUnregisterSysEventHandler"]: 0}
+                       SYMBOLS["sceKernelUnregisterSysEventHandler"]: 0,
+                       SYMBOLS["sceKernelDcacheWritebackInvalidateAll"]: 0,
+                       SYMBOLS["sceKernelIcacheInvalidateAll"]: 0,
+                       SYMBOLS["scePowerTick"]: 0}
             if base + 0x21AC <= address < base + 0x22C0:
                 returns[address] = clock[0] if address == base + 0x223C else 0
             if address == SYMBOLS["sctrlHENFindFunction"]:
@@ -73,6 +85,8 @@ class ControllerSampler(unittest.TestCase):
             if address == SYMBOLS.get("memcpy"):
                 m.mem_write(physical(a), bytes(m.mem_read(physical(b), c)))
                 returns[address] = a
+            if address == SYMBOLS.get("memcmp"):
+                returns[address] = int(bytes(m.mem_read(physical(a), c)) != bytes(m.mem_read(physical(b), c)))
             if address in returns:
                 m.reg_write(reg.UC_MIPS_REG_V0, returns[address])
                 m.reg_write(reg.UC_MIPS_REG_V1, 0)
@@ -106,6 +120,9 @@ class ControllerSampler(unittest.TestCase):
             # Sony maps the DS3 L1 state to the PSP L trigger in standard reads.
             self.assertEqual(buttons, 0xFFFEBEEF if negative else 0x14110)
             self.assertEqual(frame[8:10], bytes([11, 22]))
+        if check is not None:
+            check(cpu, invoke, base, state, clock, put, physical)
+            return
         clock[0] += 250000
         self.assertEqual(invoke(base + 0x968, [0, 128, 128]), 0)
         self.assertEqual(invoke(base + 0x1E70, [0x0A600400, 1, 0, 0], 0x100000), 1)

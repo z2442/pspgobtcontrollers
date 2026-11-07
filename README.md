@@ -58,9 +58,10 @@ Leave development markers such as `enable-filter`, `enable-input`, and
   Factory stick calibration is read on connection and valid user calibration
   takes precedence. Player 1's light is enabled. See [Switch Pro support](docs/switch-pro.md).
 - Input processing wakes on received data, with bounded batches to give games
-  CPU time. Source builds also let the native sampler decode queued input from
-  an established stream immediately, without another worker pass. The plugin
-  does not change the PSP CPU clock. See [input latency](docs/input-latency.md).
+  CPU time. Source builds merge the latest validated input into controller
+  buffer and latch reads, including reports received since the last native
+  sample. The plugin does not change the PSP CPU clock.
+  See [input latency](docs/input-latency.md).
 - Disconnecting, suspending, or receiving no valid report for 250 ms releases
   held input.
 - Release builds generate no diagnostic logs or firmware dumps.
