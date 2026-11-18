@@ -18,6 +18,7 @@
 #include "pair_command_trace.h"
 #include "bt_input_bridge.h"
 #include "session_trace.h"
+#include "mapping_store.h"
 
 /* Resident: another plugin may chain our callback. Disable and reboot to
  * remove it; do not tear down a callback that may still be referenced. */
@@ -31,6 +32,12 @@ static int enable_filter;
 static SceUID seen[128];
 static unsigned seen_count;
 static int leaving;
+/* Packaging checks the actual build, independently of the requested profile. */
+#if PSPGOBT_MAPPING_UI
+const char gobt_mapping_ui_build_tag[] = "mapping-ui:enabled";
+#else
+const char gobt_mapping_ui_build_tag[] = "mapping-ui:disabled";
+#endif
 
 #if PSPGOBT_DEBUG
 typedef struct {
@@ -175,6 +182,11 @@ static void inspect_module(SceModule *mod)
         hid = gobt_install_hid_route(mod, firmware);
         log_line("xmb-hid-route setup result=%d (0=installed -2=image mismatch)\n", hid);
         int pair = hid == 0 ? gobt_install_pair_route(mod, firmware) : -1;
+#if PSPGOBT_MAPPING_UI
+        /* Editing an existing controller does not require the discovery/
+         * registration hook to be ready. The mapper has its own image guard. */
+        if (hid == 0) gobt_mapping_install(mod, firmware);
+#endif
         gobt_session_trace(GOBT_TRACE_INSTALL, 0, hid, pair, trace);
         log_line("bt-pair-route setup result=%d (0=installed -2=image mismatch -3=provider mismatch)\n",
                  pair);
@@ -208,6 +220,7 @@ int module_start(SceSize args, void *argp)
     if (sceKernelGetModel() != PSP_GO) return -1;
     firmware = sceKernelDevkitVersion();
     if (firmware != 0x06060010 && firmware != 0x06060110) return -1;
+    gobt_mapping_start();
     gobt_session_trace_start(firmware);
 #if PSPGOBT_DEBUG
     sceIoMkdir("ef0:/seplugins", 0777);
@@ -268,6 +281,7 @@ int module_reboot_before(void *argp, int arg2, int arg3, int arg4)
 {
     (void)argp; (void)arg2; (void)arg3; (void)arg4;
     leaving = 1;
+    gobt_mapping_shutdown();
     gobt_shutdown_input_bridge(1);
     gobt_sink_shutdown();
     gobt_session_trace_stop();
@@ -278,6 +292,7 @@ int module_reboot_phase(int arg1, void *argp, int arg3, int arg4)
 {
     (void)arg1; (void)argp; (void)arg3; (void)arg4;
     leaving = 1;
+    gobt_mapping_shutdown();
     gobt_shutdown_input_bridge(0);
     gobt_sink_shutdown();
     return 0;

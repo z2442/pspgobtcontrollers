@@ -79,3 +79,22 @@ reconnect and controller protocol suites remain in place.
 
 The code removes this extra software wait. Bluetooth delivery, game scheduling
 and end-to-end responsiveness still require confirmation on a physical PSP Go.
+
+## Reconnect link settings
+
+Hardware traces with a DualSense after a reboot/reconnect showed the plugin
+adding under 1 ms, while reports reached the PSP late and unevenly: about
+130 reports/s for the first seconds, then ~200/s drifting up to ~35 ms behind
+the controller's own clock. Smaller (basic-mode) reports did not help, so the
+amount of data was not the limit.
+
+The native DS3 path has no such lag. Sony's BSMan HID setup (`+0xa128`) checks
+the identified vendor/product and, for a DS3 only (054C/0268), sends two
+Bluetooth module commands before HID registration: `+0x34f8(device, 0)`
+(command `0x79`) and `+0xab8c(device)` (command `0x24` with
+`1, 1, 18, 18, 2, 0, 0`). Supported controllers never take that branch, since
+their identity is deliberately left unknown to avoid Sony's DS3-only setup.
+The plugin now sends exactly these two requests through the same command
+helper once per connection, after identification and before input starts.
+With them the reconnect lag disappeared on a PSP Go. The commands are Sony's
+vendor protocol; their exact meaning is not documented here.

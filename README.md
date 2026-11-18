@@ -25,7 +25,9 @@ Joy-Con, Switch 2 Pro, and third-party Switch controllers are not supported.
 ## Installation
 
 1. Download `pspgobt-release-v1.0.zip` from [Releases](https://github.com/z2442/pspgobtcontrollers/releases).
-2. Copy `seplugins/pspgobt/pspgobt_probe.prx` into `ef0:/seplugins/pspgobt/`.
+2. Copy both `seplugins/pspgobt/pspgobt_probe.prx` and `mapping_ui.prx` into
+   `ef0:/seplugins/pspgobt/`. The mapping helper does not need its own plugin
+   entry; the main plugin loads it when Bluetooth Settings opens.
 3. Add or update this entry in `ef0:/seplugins/PLUGINS.TXT`:
 
    ```text
@@ -41,8 +43,8 @@ Joy-Con, Switch 2 Pro, and third-party Switch controllers are not supported.
 The controller should appear as a **HID** device. Keep the `always` entry so the
 plugin loads in the XMB, games, and applications.
 
-**Upgrading:** replace the PRX and restart. Keep your existing pairing and
-`controllers.cfg`; you do not need to remove and pair a working controller again.
+**Upgrading:** replace both PRX files and restart. Keep your existing pairing,
+`controllers.cfg`, and `mappings.cfg`; you do not need to remove and pair a working controller again.
 Leave development markers such as `enable-filter`, `enable-input`, and
 `input-test` absent for normal use.
 
@@ -75,6 +77,35 @@ a successful model lookup. See [reconnect input setup](docs/reconnect-input.md).
 Touchpad, microphone, motion, haptics, adaptive triggers, battery reporting,
 Edge-specific controls, the Switch Capture button, and USB input are not implemented.
 
+## Controller mapping
+
+Open **Settings → Bluetooth Device Settings → Manage Bluetooth Devices**,
+highlight a supported paired controller, and press **Triangle → Controller Mapping**,
+then press **Triangle** again to open the editor. Every editor choice works the
+same way: select it, the menu closes, then press **Triangle** to continue.
+Choose a source button and its destination, select the left or right stick for
+the PSP analog stick, or invert its X/Y axes. Choose **Save Mapping** to apply
+and save changes. **Restore Defaults** resets the draft; select Save afterward.
+**Cancel**, or the system's back button, closes the editor without saving.
+
+Mappings are separate for each controller's Bluetooth address, including two
+controllers of the same model, and follow it across reconnects, reboots, and
+XMB/game transitions. Up to eight profiles are stored in `mappings.cfg` beside
+the plugin, with checksum validation and recovery from the previous save.
+They contain no pairing keys or input history. The PSP's physical controls
+remain available even if a remote button is disabled or reassigned.
+
+Both L1/L2 destinations produce PSP L, and R1/R2 produce PSP R. L3/R3 remain
+available to software using the extended DS3 controls. Switch button labels
+follow their physical positions (Triangle/X, Circle/A, Cross/B, Square/Y).
+The menu uses the native Bluetooth widgets with guarded 6.60/6.61 hooks and
+has been used on a PSP Go. Selecting a row closes the menu natively and the
+next Triangle press shows the chosen screen, so the editor never reopens a page
+while Sony's own close is still running.
+
+To build without the mapping menu, use `make PSPGOBT_MAPPING_UI=0 package`,
+which produces a separately named `-no-mapping` package.
+
 ## Troubleshooting
 
 - **Works in the XMB only:** check that the plugin entry starts with `always`
@@ -83,6 +114,8 @@ Edge-specific controls, the Switch Capture button, and USB input are not impleme
   replace the PRX, and restart the PSP.
 - **Missing `controllers.cfg`:** connect the paired controller in the XMB and
   wait two seconds so the plugin can learn it before launching a game.
+- **Controller Mapping is missing:** copy both PRXs from the same release and
+  restart. A firmware instruction mismatch leaves the native menu unchanged.
 - **Connection issues:** report your firmware, plugin version, and reproduction
   steps in [Issues](https://github.com/z2442/pspgobtcontrollers/issues).
   A session-trace build can capture connection events without firmware dumps;
@@ -99,7 +132,7 @@ make test
 make PSPGOBT_DEBUG=0 PSPGOBT_SESSION_TRACE=0 package
 ```
 
-The quiet build produces `pspgobt_probe.prx` and
+The quiet build produces `pspgobt_probe.prx`, `ui/mapping_ui.prx`, and
 `dist/pspgobt-release-v1.0.zip`. Package versions are read from the
 `PSP_MODULE_INFO` declaration in `src/plugin.c`.
 

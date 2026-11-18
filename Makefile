@@ -1,6 +1,14 @@
 .DEFAULT_GOAL := all
 PSPGOBT_DEBUG ?= 0
 PSPGOBT_SESSION_TRACE ?= 0
+# Controller Mapping in Bluetooth Settings. Set 0 to build without the XMB
+# menu hooks; the controller bridge works either way.
+PSPGOBT_MAPPING_UI ?= 1
+ifneq ($(PSPGOBT_MAPPING_UI),0)
+ifneq ($(PSPGOBT_MAPPING_UI),1)
+$(error PSPGOBT_MAPPING_UI must be 0 or 1)
+endif
+endif
 ifneq ($(PSPGOBT_SESSION_TRACE),0)
 ifneq ($(PSPGOBT_SESSION_TRACE),1)
 $(error PSPGOBT_SESSION_TRACE must be 0 or 1)
@@ -20,6 +28,8 @@ test:
 	mkdir -p build
 	$(HOST_CC) $(HOST_CFLAGS) -Iinclude tests/test_core.c src/dualsense.c src/switch_pro.c src/input_state.c src/xmb_patch.c src/probe_policy.c src/hid_route.c src/pairing_route.c src/report_bridge.c src/target_cache.c -o build/test_core
 	./build/test_core
+	$(HOST_CC) $(HOST_CFLAGS) -Iinclude tests/test_mapping.c src/controller_map.c src/mapping_patch.c src/dualsense.c -o build/test_mapping
+	./build/test_mapping
 	python3 tests/test_inspect.py
 
 test-mips:
@@ -30,11 +40,12 @@ test-mips:
 
 ifeq ($(strip $(filter test test-mips,$(MAKECMDGOALS))),)
 TARGET = pspgobt_probe
-OBJS = src/plugin.o src/xmb_patch.o src/dualsense.o src/switch_pro.o src/input_state.o src/native_sink.o src/ctrl_read.o src/probe_policy.o src/bsman_trace.o src/hid_route.o src/xmb_hid_route.o src/pairing_route.o src/xmb_pair_route.o src/pair_command_trace.o src/report_bridge.o src/bt_input_bridge.o src/target_cache.o src/session_trace.o
+OBJS = src/plugin.o src/xmb_patch.o src/dualsense.o src/switch_pro.o src/input_state.o src/native_sink.o src/ctrl_read.o src/probe_policy.o src/bsman_trace.o src/hid_route.o src/xmb_hid_route.o src/pairing_route.o src/xmb_pair_route.o src/pair_command_trace.o src/report_bridge.o src/bt_input_bridge.o src/target_cache.o src/session_trace.o src/controller_map.o src/mapping_patch.o src/mapping_store.o src/mapping_loader.o
 INCDIR = include
 DEPFLAGS = -MMD -MP
 CFLAGS = -std=gnu99 -Os -G0 -Wall -Wextra -Werror -fno-pic
 CFLAGS += $(DEPFLAGS) -DPSPGOBT_DEBUG=$(PSPGOBT_DEBUG) -DPSPGOBT_SESSION_TRACE=$(PSPGOBT_SESSION_TRACE)
+CFLAGS += -DPSPGOBT_MAPPING_UI=$(PSPGOBT_MAPPING_UI)
 ASFLAGS = $(CFLAGS)
 BUILD_PRX = 1
 PRX_EXPORTS = exports.exp
@@ -45,10 +56,20 @@ LIBS = -lpspsystemctrl_kernel -lpsppower_driver
 PSPSDK := $(shell psp-config --pspsdk-path)
 include $(PSPSDK)/lib/build.mak
 
-all: protocol
+all: protocol mapping-ui
+
+.PHONY: mapping-ui
+mapping-ui:
+	$(MAKE) -C ui
+
+.PHONY: clean-ui
+clean-ui:
+	$(MAKE) -C ui clean
+
+clean: clean-ui
 
 # Switching modes must rebuild objects even if no source file has changed.
-PROFILE_STAMP := build/.pspgobt-profile-$(PSPGOBT_DEBUG)-$(PSPGOBT_SESSION_TRACE)
+PROFILE_STAMP := build/.pspgobt-profile-$(PSPGOBT_DEBUG)-$(PSPGOBT_SESSION_TRACE)-$(PSPGOBT_MAPPING_UI)
 $(PROFILE_STAMP):
 	mkdir -p build
 	rm -f build/.pspgobt-profile-*
@@ -57,6 +78,7 @@ $(PROFILE_STAMP):
 $(OBJS): $(PROFILE_STAMP)
 
 test-bridge-mips: all
+	python3 tests/test_mapping_execution.py
 	python3 tests/test_bridge_execution.py
 	python3 tests/test_sink_execution.py
 	python3 tests/test_reconnect_execution.py
@@ -73,7 +95,7 @@ test-bridge-mips: all
 	python3 tests/test_connect_epoch_execution.py
 	python3 tests/test_input_scheduling_execution.py
 	python3 tests/test_session_trace_execution.py
-	python3 tests/test_build_profile.py --debug $(PSPGOBT_DEBUG) --session-trace $(PSPGOBT_SESSION_TRACE)
+	python3 tests/test_build_profile.py --debug $(PSPGOBT_DEBUG) --session-trace $(PSPGOBT_SESSION_TRACE) --mapping-ui $(PSPGOBT_MAPPING_UI)
 
 protocol: build/libpspgobt_protocol.a
 
@@ -87,6 +109,7 @@ EXTRA_CLEAN += build/libpspgobt_protocol.a src/dualsense.o src/switch_pro.o buil
 package: all
 	mkdir -p dist/seplugins/pspgobt
 	cp pspgobt_probe.prx dist/seplugins/pspgobt/
+	cp ui/mapping_ui.prx dist/seplugins/pspgobt/
 	cp packaging/PLUGINS.TXT.example dist/seplugins/pspgobt/
 	cp README.md dist/
 	cp CHANGELOG.md dist/
@@ -120,5 +143,5 @@ package: all
 	cp docs/input-latency.md dist/docs/
 	cp docs/reconnect-input.md dist/docs/
 	cp docs/switch-pro.md dist/docs/
-	python3 tools/package.py --debug $(PSPGOBT_DEBUG) --session-trace $(PSPGOBT_SESSION_TRACE)
+	python3 tools/package.py --debug $(PSPGOBT_DEBUG) --session-trace $(PSPGOBT_SESSION_TRACE) --mapping-ui $(PSPGOBT_MAPPING_UI)
 endif

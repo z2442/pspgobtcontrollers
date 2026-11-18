@@ -10,6 +10,7 @@
 #include <string.h>
 #include "input_state.h"
 #include "native_sink.h"
+#include "mapping_ui.h"
 #include "bt_input_bridge.h"
 #include "ctrl_read.h"
 
@@ -47,13 +48,15 @@ int pspgobtSubmitReport(const uint8_t *report, size_t size)
 
 int gobt_sink_submit_state(const DsState *state)
 {
+    DsState mapped;
     int interrupts, result = 0;
     if (!state || !ready || suspended || shutting_down) return -1;
     interrupts = sceKernelCpuSuspendIntr();
     /* Recheck after parsing in case a power event cleared the session. */
     if (!suspended) {
-        gobt_input_update(&input, state, sceKernelGetSystemTimeWide());
-        gobt_ctrl_read_update(state);
+        gobt_mapping_apply(state, &mapped);
+        gobt_input_update(&input, &mapped, sceKernelGetSystemTimeWide());
+        gobt_ctrl_read_update(&mapped);
     } else
         result = -1;
     sceKernelCpuResumeIntr(interrupts);

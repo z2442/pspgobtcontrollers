@@ -20,9 +20,13 @@ SYMBOLS.setdefault("gobt_log", 0x0A700E00)
 
 def machine():
     cpu = Uc(UC_ARCH_MIPS, UC_MODE_MIPS32 | UC_MODE_LITTLE_ENDIAN)
-    cpu.mem_map(0, 0x10000)
     section_offset = struct.unpack_from("<I", ELF, 32)[0]
     section_size, section_count = struct.unpack_from("<HH", ELF, 46)
+    # Map the whole image, including .bss: diagnostic profiles exceed 64 KiB.
+    end = max([address + size for _, _, flags, address, _, size, *_ in
+               (struct.unpack_from("<10I", ELF, section_offset + i * section_size)
+                for i in range(section_count)) if flags & 2] + [0x10000])
+    cpu.mem_map(0, (end + 0xFFFF) & ~0xFFFF)
     for i in range(section_count):
         _, kind, flags, address, offset, size, *_ = struct.unpack_from("<10I", ELF, section_offset + i * section_size)
         if flags & 2 and kind != 8 and size:

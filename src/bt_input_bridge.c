@@ -14,6 +14,7 @@
 #include "probe_log.h"
 #include "report_bridge.h"
 #include "target_cache.h"
+#include "mapping_ui.h"
 #include "switch_pro.h"
 
 typedef int (*ReadCallback)(int, int, void *);
@@ -78,6 +79,13 @@ static unsigned close_attempts[9];
 static uintptr_t wide_native[2];
 static uint8_t receive_buffers[2][RECEIVE_CAPACITY] __attribute__((aligned(64)));
 static int installed;
+/* BSMan's HID setup sends two Bluetooth module commands only to a DS3 (vendor
+ * 054C, product 0268), after identification and before input starts: BSMan
+ * +0xa27c calls +0x34f8 (command 0x79) and +0xab8c (command 0x24). Our
+ * controllers never take that branch. Without these link settings, hardware
+ * traces showed reports arriving late and in bursts after a reconnect; with
+ * them the reconnect lag is gone. Sent once per connection session. */
+static unsigned link_tuned[9];
 static int worker_started;
 static volatile int worker_busy;
 static int binding;
@@ -166,6 +174,42 @@ static __attribute__((noipa)) int cached_info(unsigned device, void *destination
         memcpy(info + 72, raw + 34, 2);
     }
     return 0;
+}
+
+static int link_command(unsigned device, u16 command, const u16 *payload, u16 bytes,
+                        u16 expected, u16 reply_bytes)
+{
+    struct { u16 command, bytes; const void *payload; } request;
+    struct { u16 expected, bytes, status, reserved; void *payload; } response;
+    u16 reply[8] = {0};
+    int result;
+    request.command = command;
+    request.bytes = bytes;
+    request.payload = payload;
+    response.expected = expected;
+    response.bytes = reply_bytes;
+    response.status = 0xffff;
+    response.reserved = 0;
+    response.payload = reply;
+    result = record_command(&request, &response, 0);
+    gobt_session_trace(GOBT_TRACE_LINK_COMMAND, device, command, (unsigned)result, response.status);
+    gobt_log("bt-input link-settings device=%u command=%02X result=%08X status=%04X\n",
+             device, command, (unsigned)result, response.status);
+    return result < 0 ? result : response.status ? -1 : 0;
+}
+
+/* Exactly the DS3 branch's requests, once per connection session. */
+static void apply_link_settings(unsigned device)
+{
+    u16 role[2], link[8];
+    if (!record_command || device < 1 || device > 8 ||
+        link_tuned[device] == session_epochs[device] + 1) return;
+    link_tuned[device] = session_epochs[device] + 1;
+    role[0] = (u16)device; role[1] = 0;
+    link[0] = (u16)device; link[1] = 1; link[2] = 1; link[3] = 18;
+    link[4] = 18; link[5] = 2; link[6] = 0; link[7] = 0;
+    if (link_command(device, 0x79, role, sizeof(role), 0x17a, 4) < 0) return;
+    link_command(device, 0x24, link, sizeof(link), 0x124, 2);
 }
 
 static int source_index(const void *context)
@@ -373,6 +417,24 @@ static int classify(unsigned device, void *info, int *query, int *cached)
         sceKernelCpuResumeIntr(interrupts);
     }
     return selected;
+}
+
+int gobt_input_bridge_paired_address(unsigned device, unsigned char address[6])
+{
+    return address && !quiescing && slot_address(device, address);
+}
+
+int gobt_input_bridge_mapping_address(unsigned device, unsigned char address[6])
+{
+    int interrupts, available;
+    if (!address || device < 1 || device > 8 || quiescing) return 0;
+    /* Configuration lookup only. Do not issue metadata requests while the
+     * native Bluetooth UI may hold its own locks. Input authentication still
+     * happens independently in classify/decode before any state is forwarded. */
+    interrupts = sceKernelCpuSuspendIntr();
+    available = !quiescing && !suspended && slot_address(device, address);
+    sceKernelCpuResumeIntr(interrupts);
+    return available;
 }
 
 static int bridge_target(unsigned device)
@@ -1106,6 +1168,9 @@ static __attribute__((noipa)) void connected(unsigned device, int checked)
     }
     if (!identify(device) || suspended || epoch != power_generation ||
         session != session_epochs[device] || session_closing(device)) return;
+    apply_link_settings(device);
+    if (suspended || epoch != power_generation || session != session_epochs[device] ||
+        session_closing(device)) return;
     if (i < 2) {
         InputSource *source = &sources[i];
         int ready = attach_pending_read(i, device);
@@ -1334,6 +1399,10 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
                 int start = gobt_sink_start(0);
                 gobt_log("bt-input native sink start result=%d source=%u\n", start, packet->source);
                 if (start < 0) return;
+                {
+                    uint8_t address[6];
+                    gobt_mapping_select(slot_address(packet->device, address) ? address : NULL);
+                }
                 active_source = (int)packet->source;
             }
             if (active_source != (int)packet->source) return;

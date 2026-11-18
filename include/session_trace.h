@@ -15,7 +15,13 @@ enum {
     GOBT_TRACE_PREPARED, GOBT_TRACE_LINK, GOBT_TRACE_MODE,
     GOBT_TRACE_REGISTER, GOBT_TRACE_REGISTER_DONE, GOBT_TRACE_INSTALL,
     GOBT_TRACE_BIND, GOBT_TRACE_PROVIDER, GOBT_TRACE_CONTEXT,
-    GOBT_TRACE_EXIT, GOBT_TRACE_RESET_BLOCKED, GOBT_TRACE_CONNECT_FLAGS
+    GOBT_TRACE_EXIT, GOBT_TRACE_RESET_BLOCKED, GOBT_TRACE_CONNECT_FLAGS,
+    /* Controller Mapping: device = stage (1 image check, 2 helper load,
+     * 3 hook install, 4 menu lookup; helper 5 action, 8 editor shown,
+     * 9 pending screen discarded). */
+    GOBT_TRACE_MAPPING,
+    /* DS3 link settings: device, a = module command, b = result, c = status. */
+    GOBT_TRACE_LINK_COMMAND
 };
 #if PSPGOBT_SESSION_TRACE
 void gobt_session_trace(unsigned kind, unsigned device, unsigned a, unsigned b, unsigned c);

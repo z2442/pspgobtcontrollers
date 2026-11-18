@@ -12,8 +12,10 @@ from test_bridge_execution import machine, SYMBOLS, word
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", type=int, choices=(0, 1), required=True)
 parser.add_argument("--session-trace", type=int, choices=(0, 1), default=0)
+parser.add_argument("--mapping-ui", type=int, choices=(0, 1), default=1)
 args = parser.parse_args()
 DEBUG, TRACE = args.debug, args.session_trace
+MAPPING = args.mapping_ui
 
 
 class BuildProfile(unittest.TestCase):
@@ -65,8 +67,10 @@ class BuildProfile(unittest.TestCase):
         self.assertEqual(b"session.log" in binary, bool(TRACE))
         self.assertEqual("trace_ring" in names, bool(TRACE))
         self.assertEqual("gobt_session_trace" in names, bool(TRACE))
+        self.assertEqual(b"mapping-ui:enabled" in binary, bool(MAPPING))
+        self.assertEqual(b"mapping-ui:disabled" in binary, not MAPPING)
 
-    def setup_module(self, name, expected):
+    def setup_module(self, name, expected, pair_result=0):
         cpu = machine()
         module = 0x0A600000
         record = bytearray(256)
@@ -78,7 +82,7 @@ class BuildProfile(unittest.TestCase):
         calls = []
         installs = {SYMBOLS[fn]: fn for fn in (
             "gobt_install_pair_command_trace", "gobt_install_input_bridge",
-            "gobt_trace_device_info", "gobt_install_hid_route", "gobt_install_pair_route")}
+            "gobt_trace_device_info", "gobt_install_hid_route", "gobt_install_pair_route", "gobt_mapping_install")}
 
         def cstring(m, pointer):
             return bytes(m.mem_read(pointer, 64)).split(b"\0", 1)[0]
@@ -91,7 +95,7 @@ class BuildProfile(unittest.TestCase):
                 self.assertEqual(m.reg_read(reg.UC_MIPS_REG_A0), module)
                 self.assertEqual(m.reg_read(reg.UC_MIPS_REG_A1), 0x06060010)
                 calls.append(installs[address])
-                returns[address] = 0
+                returns[address] = pair_result if installs[address] == "gobt_install_pair_route" else 0
             if address == SYMBOLS["strcmp"]:
                 left, right = [cstring(m, m.reg_read(r)) for r in (reg.UC_MIPS_REG_A0, reg.UC_MIPS_REG_A1)]
                 returns[address] = 0 if left == right else 1
@@ -110,7 +114,11 @@ class BuildProfile(unittest.TestCase):
 
     def test_xmb_still_installs_connection_pairing_and_routing_hooks(self):
         self.setup_module("bluetooth_plugin_module", ["gobt_trace_device_info",
-                          "gobt_install_hid_route", "gobt_install_pair_route"])
+                          "gobt_install_hid_route", "gobt_install_pair_route"] + (["gobt_mapping_install"] if MAPPING else []))
+
+    def test_mapper_can_install_when_pairing_registration_provider_is_not_ready(self):
+        self.setup_module("bluetooth_plugin_module", ["gobt_trace_device_info",
+                          "gobt_install_hid_route", "gobt_install_pair_route"] + (["gobt_mapping_install"] if MAPPING else []), pair_result=-3)
 
 
 if __name__ == "__main__":

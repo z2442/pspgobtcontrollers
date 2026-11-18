@@ -1,5 +1,6 @@
 """Run boot/reconnect orchestration with stored pairing and mocked transport."""
 import struct
+import zlib
 import unittest
 
 from unicorn import UC_HOOK_CODE
@@ -21,6 +22,8 @@ class Session:
         self.matching = True
         self.reads, self.starts, self.writes, self.closes = [], [], [], []
         self.stops, self.stop_error = [], 0
+        self.link_commands = []
+        self.forbid_record_query = False
         self.write_error = 79
         self.cpu.mem_write(self.provider + 44, struct.pack("<I", 7))
         self.cpu.mem_write(self.cdc + 44, struct.pack("<I", 7))
@@ -68,6 +71,15 @@ class Session:
             # Cached peers now query their local model record to distinguish
             # DualSense and DS4; they still avoid the public metadata API.
             command, length, payload = struct.unpack("<HHI", m.mem_read(args[0], 8))
+            if command in (0x79, 0x24):
+                expected, reply = struct.unpack("<HH", m.mem_read(args[1], 4))
+                words = list(struct.unpack("<%dH" % (length // 2), m.mem_read(payload, length)))
+                self.link_commands.append((command, words, expected, reply))
+                m.mem_write(args[1] + 4, bytes(2))  # Status 0.
+                m.reg_write(reg.UC_MIPS_REG_V0, 0)
+                m.reg_write(reg.UC_MIPS_REG_PC, m.reg_read(reg.UC_MIPS_REG_RA))
+                return
+            self.case.assertFalse(self.forbid_record_query, "Unexpected device metadata query")
             self.case.assertEqual((command, length), (0x63, 2))
             device = struct.unpack("<H", m.mem_read(payload, 2))[0]
             output = struct.unpack("<I", m.mem_read(args[1] + 8, 4))[0]
@@ -137,6 +149,10 @@ class Session:
         return self.cpu.reg_read(reg.UC_MIPS_REG_V0)
 
 
+BASIC = bytes([0xA1, 1, 128, 128, 128, 128, 8, 0, 0, 0, 0])
+
+
+
 class Reconnect(unittest.TestCase):
     def paired_target(self, session, known=True, address=b"\x01\x02\x03\x04\x05\x06", caps=0x402, slot=1,
                       model=0):
@@ -154,7 +170,7 @@ class Reconnect(unittest.TestCase):
                 self.paired_target(s, model=model)
                 s.query_error = 0x802F0203
                 word(s.cpu, "get_info", 0xDEADBEEF)
-                word(s.cpu, "record_command", 0xDEADBEEF)
+                s.forbid_record_query = True  # Link settings only; no metadata query.
                 s.invoke("worker", 0, 0)
                 self.assertEqual((len(s.starts), len(s.writes)), (1, 1))
                 self.assertEqual(s.writes[-1][1], report_id)
@@ -167,6 +183,18 @@ class Reconnect(unittest.TestCase):
                 self.assertEqual((len(s.starts), len(s.writes)), (2, 2))
                 self.assertEqual(s.writes[-1][1], report_id)
                 self.assertEqual(s.closes, [])
+
+    def test_every_connection_receives_the_native_ds3_link_settings_once(self):
+        s = Session(self)
+        s.invoke("worker", 0, 0)
+        # Byte-for-byte BSMan +0x34f8(device, 0) and +0xab8c(device).
+        self.assertEqual(s.link_commands, [
+            (0x79, [1, 0], 0x17A, 4),
+            (0x24, [1, 1, 1, 18, 18, 2, 0, 0], 0x124, 2)])
+        self.assertEqual(len(s.writes), 1)  # Activation still follows.
+        s.clock = 401000
+        s.invoke("worker", 0, 0)
+        self.assertEqual(len(s.link_commands), 2)
 
     def test_accepted_activation_without_input_is_retried_after_settling_with_new_sequence(self):
         s = Session(self)
@@ -194,21 +222,24 @@ class Reconnect(unittest.TestCase):
         word(s.cpu, "stream_recoveries", 0)
         s.cpu.mem_write(SYMBOLS["stream_recoveries"] + 4, struct.pack("<I", 3))
         s.cpu.mem_write(SYMBOLS["setup_retry_after"] + 8, struct.pack("<Q", 10000000))
-        report = bytes([0xA1, 1, 128, 128, 128, 128, 8, 0, 0, 0, 0])
-        packet = struct.pack("<6IQ", 0, s.read_word("generations"), 1,
-                             len(report), 0, len(report), s.clock) + report
-        s.cpu.mem_write(0x0A600800, packet)
-        def sink(m, address, _, __):
-            if address in (SYMBOLS["gobt_sink_start"], SYMBOLS["gobt_sink_submit_state"]):
-                m.reg_write(reg.UC_MIPS_REG_V0, 0)
-                m.reg_write(reg.UC_MIPS_REG_PC, m.reg_read(reg.UC_MIPS_REG_RA))
-        s.cpu.hook_add(UC_HOOK_CODE, sink)
-        s.invoke("consume", 0x0A600800)
+        self.deliver(s, BASIC)  # Any valid input ends activation retries.
         s.clock = 401000
         s.invoke("worker", 0, 0)
         self.assertEqual(len(s.writes), 1)
         self.assertEqual(struct.unpack("<I", s.cpu.mem_read(SYMBOLS["stream_recoveries"] + 4, 4))[0], 0)
-        self.assertEqual(struct.unpack("<Q", s.cpu.mem_read(SYMBOLS["setup_retry_after"] + 8, 8))[0], 0)
+
+    def deliver(self, s, report):
+        packet = struct.pack("<6IQ", 0, s.read_word("generations"), 1,
+                             len(report), 0, len(report), s.clock) + report
+        s.cpu.mem_write(0x0A600800, packet)
+        if not getattr(s, "sink_mocked", False):
+            def sink(m, address, _, __):
+                if address in (SYMBOLS["gobt_sink_start"], SYMBOLS["gobt_sink_submit_state"]):
+                    m.reg_write(reg.UC_MIPS_REG_V0, 0)
+                    m.reg_write(reg.UC_MIPS_REG_PC, m.reg_read(reg.UC_MIPS_REG_RA))
+            s.cpu.hook_add(UC_HOOK_CODE, sink)
+            s.sink_mocked = True
+        s.invoke("consume", 0x0A600800)
 
     def test_exhausted_fast_recovery_budget_retries_after_cooldown_without_repairing(self):
         s = Session(self)
@@ -286,7 +317,7 @@ class Reconnect(unittest.TestCase):
         next_instance.cpu.mem_write(0x0A600700, configurations[0])
         self.assertEqual(next_instance.invoke("gobt_target_decode", SYMBOLS["target_cache"], 0x0A600700, 32), 0)
         word(next_instance.cpu, "get_info", 0xDEADBEEF)
-        word(next_instance.cpu, "record_command", 0xDEADBEEF)
+        next_instance.forbid_record_query = True
         next_instance.query_error = 0x802F0203
         next_instance.invoke("worker", 0, 0)
         self.assertEqual(next_instance.reads, [])

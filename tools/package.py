@@ -4,11 +4,13 @@ from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 import shutil
 from version import project_version
+from psp_exports import function_exports, function_nid
 
 root = Path(__file__).resolve().parents[1] / "dist"
 parser = argparse.ArgumentParser()
 parser.add_argument("--debug", type=int, choices=(0, 1), default=0)
 parser.add_argument("--session-trace", type=int, choices=(0, 1), default=0)
+parser.add_argument("--mapping-ui", type=int, choices=(0, 1), default=1)
 args = parser.parse_args()
 debug, session_trace = args.debug, args.session_trace
 files = [
@@ -39,10 +41,18 @@ files = [
     "docs/input-latency.md",
     "docs/reconnect-input.md",
     "docs/switch-pro.md",
-    "seplugins/pspgobt/pspgobt_probe.prx", "seplugins/pspgobt/PLUGINS.TXT.example",
+    "seplugins/pspgobt/pspgobt_probe.prx", "seplugins/pspgobt/mapping_ui.prx", "seplugins/pspgobt/PLUGINS.TXT.example",
 ]
 variant = "debug" if debug else "session-trace" if session_trace else "release"
+if not args.mapping_ui:
+    variant += "-no-mapping"
+    files.remove("seplugins/pspgobt/mapping_ui.prx")  # Never loaded by this build.
 binary = (root / "seplugins/pspgobt/pspgobt_probe.prx").read_bytes()
+if (b"mapping-ui:enabled" in binary) != bool(args.mapping_ui) or (b"mapping-ui:disabled" in binary) != (not args.mapping_ui):
+    raise SystemExit("Refusing to package: mapping UI build profile mismatch")
+if not any(library == "PSPGoBT_trace" and nid == function_nid("pspgobtMappingService") and flags & 0x4000
+           for library, nid, _, flags in function_exports(binary)):
+    raise SystemExit("Refusing to package: controller mapping service is not exported as a syscall")
 version = project_version()
 major, minor = (int(part) for part in version.split("."))
 module = binary.find(b"PSPGoBT_Probe\0")

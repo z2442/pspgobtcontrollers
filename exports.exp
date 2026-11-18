@@ -20,5 +20,6 @@ PSP_EXPORT_FUNC(pspgobtTraceIdentity)
 PSP_EXPORT_FUNC(pspgobtRouteHid)
 PSP_EXPORT_FUNC(pspgobtRouteStoredHid)
 PSP_EXPORT_FUNC(pspgobtPairFallback)
+PSP_EXPORT_FUNC(pspgobtMappingService)
 PSP_EXPORT_END
 PSP_END_EXPORTS

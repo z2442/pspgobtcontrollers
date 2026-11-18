@@ -97,9 +97,17 @@ class Trace(unittest.TestCase):
         self.file_length = 256 * 1024
         self.call("gobt_session_trace_start", 0x06060010)
         self.call("trace_writer", 0, 0)
-        self.assertEqual(len(self.opens), 2)
         self.assertTrue(self.opens[1] & 0x400)  # PSP_O_TRUNC
-        self.assertEqual(self.closes, [9])
+        # The burst is then committed by reopening to append, never truncating.
+        self.assertEqual(len(self.opens), 3)
+        self.assertTrue(self.opens[2] & 0x100 and not self.opens[2] & 0x400)
+        self.assertEqual(self.closes, [9, 9])
+
+    def test_each_burst_is_committed_before_sleeping(self):
+        self.call("gobt_session_trace_start", 0x06060010)
+        self.call("trace_writer", 0, 0)
+        self.assertEqual((len(self.writes), self.closes, len(self.opens)), (1, [9], 2))
+        self.assertFalse(self.opens[1] & 0x400)
 
     def test_io_failures_disable_tracing_without_affecting_input(self):
         for opening in (True, False):

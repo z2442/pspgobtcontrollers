@@ -3,6 +3,7 @@
 #include <pspkernel.h>
 #include <pspsdk.h>
 #include <pspintrman_kernel.h>
+#include <stdint.h>
 
 /* Callback producers only copy numbers to RAM. A separate thread writes the
  * file, even if a Bluetooth call on the input/UI worker stops returning.
@@ -52,6 +53,9 @@ static int trace_writer(SceSize args, void *argp)
         fd = sceIoOpen(TRACE_PATH, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_TRUNC, 0666);
         if (fd < 0) { trace_enabled = 0; return 0; }
     }
+    int dirty = 0;
+    /* Limit flash metadata writes; games may stream from the same storage. */
+    uint64_t commit_after = 0;
     for (;;) {
         TraceRecord record;
         char line[63];
@@ -61,6 +65,15 @@ static int trace_writer(SceSize args, void *argp)
             int stop = trace_stopping || trace_sequence >= TRACE_LIMIT;
             sceKernelCpuResumeIntr(interrupts);
             if (stop) break;
+            /* Commit the FAT length every 5 s: a frozen XMB is often
+             * ended by holding power, which would discard unclosed writes. */
+            if (dirty && (trace_stopping || (uint64_t)sceKernelGetSystemTimeWide() >= commit_after)) {
+                commit_after = sceKernelGetSystemTimeWide() + 5000000;
+                sceIoClose(fd);
+                fd = sceIoOpen(TRACE_PATH, PSP_O_WRONLY | PSP_O_CREAT | PSP_O_APPEND, 0666);
+                dirty = 0;
+                if (fd < 0) { trace_enabled = 0; return 0; }
+            }
             sceKernelDelayThread(50000);
             continue;
         }
@@ -75,6 +88,7 @@ static int trace_writer(SceSize args, void *argp)
         }
         if (sceIoWrite(fd, line, sizeof(line)) != sizeof(line)) break;
         ++trace_written;
+        dirty = 1;
     }
     trace_enabled = 0;
     sceIoClose(fd);

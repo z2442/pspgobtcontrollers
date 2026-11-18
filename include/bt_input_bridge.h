@@ -20,4 +20,9 @@ int gobt_input_bridge_connect_ready(unsigned device);
 int gobt_input_bridge_prepare(unsigned device);
 /* Passive selection for saved XMB objects if their metadata query fails. */
 int gobt_input_bridge_known(unsigned device);
+/* Copies the current slot address; never performs a Bluetooth operation. */
+int gobt_input_bridge_paired_address(unsigned device, unsigned char address[6]);
+/* XMB configuration only: copies a paired HID address without Bluetooth calls.
+ * This does not authenticate a source or grant permission to forward input. */
+int gobt_input_bridge_mapping_address(unsigned device, unsigned char address[6]);
 #endif
