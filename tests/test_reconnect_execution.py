@@ -184,17 +184,43 @@ class Reconnect(unittest.TestCase):
                 self.assertEqual(s.writes[-1][1], report_id)
                 self.assertEqual(s.closes, [])
 
-    def test_every_connection_receives_the_native_ds3_link_settings_once(self):
+    def test_link_settings_are_sent_on_the_event_thread_before_worker_setup(self):
+        for known in (True, False):
+            with self.subTest(known=known):
+                s = Session(self)
+                self.paired_target(s, known=known)
+                self.assertEqual(s.invoke("native_setup_event", 1), 0)
+                # Byte-for-byte BSMan +0x34f8(device, 0) and +0xab8c(device),
+                # sent here because native DS3 setup runs on this thread.
+                expected = [(0x79, [1, 0], 0x17A, 4),
+                            (0x24, [1, 1, 1, 18, 18, 2, 0, 0], 0x124, 2)]
+                self.assertEqual(s.link_commands, expected if known else [])
+                self.assertEqual(s.starts, [])  # HID setup still moves to the worker.
+                self.assertTrue(s.read_word("pending_devices") & 2)
+                s.invoke("worker", 0, 0)
+                self.assertEqual(len(s.link_commands), 2 if known else 0)  # Worker sends none.
+
+    def test_connection_missing_the_event_hook_gets_link_settings_from_the_helper(self):
         s = Session(self)
+        self.paired_target(s, known=False)  # Event hook skips unknown peers.
+        word(s.cpu, "link_sema", 5)
         s.invoke("worker", 0, 0)
-        # Byte-for-byte BSMan +0x34f8(device, 0) and +0xab8c(device).
+        self.assertEqual(s.link_commands, [])  # The worker itself never sends.
+        s.clock = 50000
+        self.deliver(s, BASIC)
+        self.assertEqual(s.read_word("link_requested"), 2)
+        s.invoke("service_link_requests")
         self.assertEqual(s.link_commands, [
             (0x79, [1, 0], 0x17A, 4),
             (0x24, [1, 1, 1, 18, 18, 2, 0, 0], 0x124, 2)])
-        self.assertEqual(len(s.writes), 1)  # Activation still follows.
-        s.clock = 401000
-        s.invoke("worker", 0, 0)
+        # Same connection: never twice. A lost link clears it for the next one.
+        s.invoke("request_link_settings", 1)
+        s.invoke("service_link_requests")
         self.assertEqual(len(s.link_commands), 2)
+        self.assertEqual(s.read_word("link_sent"), 2)
+        s.flags = 0
+        s.invoke("poll_links")
+        self.assertEqual(s.read_word("link_sent"), 0)
 
     def test_accepted_activation_without_input_is_retried_after_settling_with_new_sequence(self):
         s = Session(self)

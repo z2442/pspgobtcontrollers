@@ -586,9 +586,10 @@ class CompiledBridge(unittest.TestCase):
         if prepared:
             # A failed original helper leaves these locals uninitialized.
             # Poison them with DS3 IDs: the bypass must clear both so Sony's
-            # DS3-specific branch is never entered for the DualSense.
+            # DS3 branch, with its blocking module commands, never runs on the
+            # worker. The event-thread hook sends those commands instead.
             cpu.mem_write(0x0A60EFE0, struct.pack("<HH", 0x054C, 0x0268))
-        reads, registrations, did_queries = [], [], []
+        reads, registrations, did_queries, events = [], [], [], []
 
         def observe(m, address, _, __):
             if address in trampolines:
@@ -609,6 +610,15 @@ class CompiledBridge(unittest.TestCase):
                     # Reproduce the disappearing context seen while the old
                     # startup waited for a remote DID query in the 0.12 log.
                     m.mem_write(physical(context + 4), b"\0\0")
+            if address == base + 0x3720:
+                # Bluetooth module command helper: record the exact request.
+                request, response = m.reg_read(reg.UC_MIPS_REG_A0), m.reg_read(reg.UC_MIPS_REG_A1)
+                command, size, payload = struct.unpack("<HHI", m.mem_read(physical(request), 8))
+                expected, reply = struct.unpack("<HH", m.mem_read(physical(response), 4))
+                words = list(struct.unpack("<%dH" % (size // 2), m.mem_read(physical(payload), size)))
+                events.append(("command", command, words, expected, reply))
+                m.mem_write(physical(response) + 4, bytes(2))  # Status 0.
+                returns[address] = 0
             if address == base + 0xCBF8:
                 registrations.append(m.reg_read(reg.UC_MIPS_REG_A0))
                 returns[address] = 0x80310102
@@ -617,6 +627,7 @@ class CompiledBridge(unittest.TestCase):
                           reg.UC_MIPS_REG_A2, reg.UC_MIPS_REG_A3, reg.UC_MIPS_REG_T0)]
                 self.assertEqual(actual, [2, SYMBOLS["receive_buffers"], 128, SYMBOLS["receive_wide"], context])
                 reads.append(actual)
+                events.append(("read",))
                 returns[address] = 0
             if address in returns:
                 m.reg_write(reg.UC_MIPS_REG_V0, returns[address])
@@ -630,7 +641,11 @@ class CompiledBridge(unittest.TestCase):
         self.assertEqual(did_queries, [] if prepared else [1])
         if prepared:
             self.assertEqual(bytes(cpu.mem_read(0x0A60EFE0, 4)), b"\0" * 4)
+            # No module command may wait on the worker before the first read.
+            self.assertEqual(events, [("read",)])
             self.assertEqual(struct.unpack("<H", cpu.mem_read(physical(context + 6), 2))[0], 1)
+        else:
+            self.assertEqual([e for e in events if e[0] == "command"], [])
         self.assertEqual(cpu.reg_read(reg.UC_MIPS_REG_V0), 0 if prepared else 0x80310102)
         self.assertEqual(cpu.reg_read(reg.UC_MIPS_REG_SP), 0x0A60F000)
 

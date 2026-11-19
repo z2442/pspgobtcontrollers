@@ -20,7 +20,8 @@ enum {
      * 3 hook install, 4 menu lookup; helper 5 action, 8 editor shown,
      * 9 pending screen discarded). */
     GOBT_TRACE_MAPPING,
-    /* DS3 link settings: device, a = module command, b = result, c = status. */
+    /* DS3 link settings on the event thread: device, a = module command,
+     * b = result, c = status. */
     GOBT_TRACE_LINK_COMMAND
 };
 #if PSPGOBT_SESSION_TRACE

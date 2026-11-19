@@ -115,7 +115,6 @@ class SwitchProExecution(unittest.TestCase):
         s.forbid_record_query = True  # Link settings only; no metadata query.
         s.invoke("worker", 0, 0)
         self.assertEqual(s.reads, [])
-        self.assertEqual([command[0] for command in s.link_commands], [0x79, 0x24])
         self.assertEqual(s.writes[-1][2], 0)
         self.assertEqual(s.writes[-1][11:13], b"\x03\x30")
         s.flags = 0

@@ -33,6 +33,7 @@ class Installation:
         self.wait_result, self.waits, self.deleted = 0, [], []
         self.sema_result, self.create_result, self.start_result = 10, 8, 0
         self.semas, self.sema_deleted, self.signals, self.input_waits = [], [], [], []
+        self.link_semas, self.link_threads, self.link_sema_result = [], [], 0xFFFFFFFF
         self.unregistered, self.priorities = [], []
         self.cpu.hook_add(UC_HOOK_CODE, self.observe)
 
@@ -82,7 +83,11 @@ class Installation:
         if address == SYMBOLS["sceKernelUnregisterSysEventHandler"]:
             self.unregistered.append(a)
             returns[address] = 0
-        if address == SYMBOLS["sceKernelCreateSema"]:
+        if address == SYMBOLS["sceKernelCreateSema"] and self.cstring(m, a) == b"PSPGoBTLinkReady":
+            # Optional link-settings helper; disabled unless a test enables it.
+            self.link_semas.append(a)
+            returns[address] = self.link_sema_result
+        elif address == SYMBOLS["sceKernelCreateSema"]:
             self.case.assertEqual(self.cstring(m, a), b"PSPGoBTInputReady")
             self.case.assertEqual((b, c, m.reg_read(reg.UC_MIPS_REG_A3),
                                    m.reg_read(reg.UC_MIPS_REG_T0)), (0, 0, 1, 0))
@@ -99,11 +104,16 @@ class Installation:
             self.case.assertEqual((a, b, struct.unpack("<I", m.mem_read(c, 4))[0]), (10, 1, 50000))
             self.input_waits.append(a)
             m.emu_stop()
-        if address == SYMBOLS["sceKernelCreateThread"]:
+        if address == SYMBOLS["sceKernelCreateThread"] and self.cstring(m, a) == b"PSPGoBTLink":
+            self.link_threads.append(c)
+            returns[address] = 12
+        elif address == SYMBOLS["sceKernelCreateThread"]:
             self.created.append(a)
             self.priorities.append(c)
             returns[address] = self.create_result
-        if address == SYMBOLS["sceKernelStartThread"]:
+        if address == SYMBOLS["sceKernelStartThread"] and a == 12:
+            returns[address] = 0
+        elif address == SYMBOLS["sceKernelStartThread"]:
             self.started.append(a)
             returns[address] = self.start_result
         if address == SYMBOLS["sceKernelWaitThreadEnd"]:
@@ -168,6 +178,17 @@ class Installer(unittest.TestCase):
         s.call("worker", 0, 0)
         self.assertEqual(s.read_word("installed"), 1)
         self.assertEqual((len(s.power), len(s.created), len(s.started)), (1, 1, 1))
+
+    def test_link_settings_helper_starts_at_low_priority_and_is_optional(self):
+        s = Installation(self)
+        s.link_sema_result = 11
+        self.assertEqual(s.call("gobt_start_input_bridge", 0x06060010), 0)
+        self.assertEqual(s.link_threads, [0x30])  # Below the 0x10 input worker.
+        self.assertEqual(struct.unpack("<i", s.cpu.mem_read(SYMBOLS["link_thread"], 4))[0], 12)
+        # Without a semaphore the bridge still starts; input never depends on it.
+        s = Installation(self)
+        self.assertEqual(s.call("gobt_start_input_bridge", 0x06060010), 0)
+        self.assertEqual((len(s.link_semas), s.link_threads), (1, []))
 
     def test_cache_file_loads_before_worker_start_and_short_writes_remain_dirty(self):
         s = Installation(self)

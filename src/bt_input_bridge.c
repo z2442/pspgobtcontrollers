@@ -79,13 +79,6 @@ static unsigned close_attempts[9];
 static uintptr_t wide_native[2];
 static uint8_t receive_buffers[2][RECEIVE_CAPACITY] __attribute__((aligned(64)));
 static int installed;
-/* BSMan's HID setup sends two Bluetooth module commands only to a DS3 (vendor
- * 054C, product 0268), after identification and before input starts: BSMan
- * +0xa27c calls +0x34f8 (command 0x79) and +0xab8c (command 0x24). Our
- * controllers never take that branch. Without these link settings, hardware
- * traces showed reports arriving late and in bursts after a reconnect; with
- * them the reconnect lag is gone. Sent once per connection session. */
-static unsigned link_tuned[9];
 static int worker_started;
 static volatile int worker_busy;
 static int binding;
@@ -94,6 +87,11 @@ static unsigned shutdown_attempted;
 static unsigned callback_depth;
 static SceUID worker_id = -1, cdc_provider_uid;
 static SceUID input_sema = -1;
+/* Link settings: sent once per connection, by BSMan's event thread at native
+ * setup when it is reached, otherwise by a helper after input starts. Never by
+ * the input worker, which must not wait on Bluetooth module replies. */
+static SceUID link_sema = -1, link_thread = -1;
+static volatile unsigned link_sent, link_requested;
 static uintptr_t hook_base;
 static u32 hook_original[8], hook_replacement[8];
 static u32 close_original;
@@ -174,42 +172,6 @@ static __attribute__((noipa)) int cached_info(unsigned device, void *destination
         memcpy(info + 72, raw + 34, 2);
     }
     return 0;
-}
-
-static int link_command(unsigned device, u16 command, const u16 *payload, u16 bytes,
-                        u16 expected, u16 reply_bytes)
-{
-    struct { u16 command, bytes; const void *payload; } request;
-    struct { u16 expected, bytes, status, reserved; void *payload; } response;
-    u16 reply[8] = {0};
-    int result;
-    request.command = command;
-    request.bytes = bytes;
-    request.payload = payload;
-    response.expected = expected;
-    response.bytes = reply_bytes;
-    response.status = 0xffff;
-    response.reserved = 0;
-    response.payload = reply;
-    result = record_command(&request, &response, 0);
-    gobt_session_trace(GOBT_TRACE_LINK_COMMAND, device, command, (unsigned)result, response.status);
-    gobt_log("bt-input link-settings device=%u command=%02X result=%08X status=%04X\n",
-             device, command, (unsigned)result, response.status);
-    return result < 0 ? result : response.status ? -1 : 0;
-}
-
-/* Exactly the DS3 branch's requests, once per connection session. */
-static void apply_link_settings(unsigned device)
-{
-    u16 role[2], link[8];
-    if (!record_command || device < 1 || device > 8 ||
-        link_tuned[device] == session_epochs[device] + 1) return;
-    link_tuned[device] = session_epochs[device] + 1;
-    role[0] = (u16)device; role[1] = 0;
-    link[0] = (u16)device; link[1] = 1; link[2] = 1; link[3] = 18;
-    link[4] = 18; link[5] = 2; link[6] = 0; link[7] = 0;
-    if (link_command(device, 0x79, role, sizeof(role), 0x17a, 4) < 0) return;
-    link_command(device, 0x24, link, sizeof(link), 0x124, 2);
 }
 
 static int source_index(const void *context)
@@ -553,11 +515,97 @@ void gobt_input_bridge_connected(unsigned device)
     wake_worker();
 }
 
+static int link_command(unsigned device, u16 command, const u16 *payload, u16 bytes,
+                        u16 expected, u16 reply_bytes)
+{
+    struct { u16 command, bytes; const void *payload; } request;
+    struct { u16 expected, bytes, status, reserved; void *payload; } response;
+    u16 reply[8] = {0};
+    int result;
+    request.command = command;
+    request.bytes = bytes;
+    request.payload = payload;
+    response.expected = expected;
+    response.bytes = reply_bytes;
+    response.status = 0xffff;
+    response.reserved = 0;
+    response.payload = reply;
+    result = record_command(&request, &response, 0);
+    gobt_session_trace(GOBT_TRACE_LINK_COMMAND, device, command, (unsigned)result, response.status);
+    return result < 0 ? result : response.status ? -1 : 0;
+}
+
+/* BSMan's HID setup sends two Bluetooth module link commands only to a DS3
+ * (vendor 054C, product 0268): BSMan +0xa27c calls +0x34f8 (command 0x79)
+ * and +0xab8c (command 0x24). Our controllers never take that branch, and
+ * their reconnected reports then arrived late and in bursts. Native setup
+ * runs on BSMan's event thread at this call site, so the commands go here,
+ * byte for byte, before setup moves to the worker. Sending them from the
+ * worker could deadlock: the command helper holds BSMan's untimed command
+ * semaphore while waiting for a reply that this event thread delivers. */
+static void send_link_settings(unsigned device, int require_known)
+{
+    u16 role[2], link[8];
+    int interrupts;
+    if (!record_command || (require_known && !gobt_input_bridge_known(device))) return;
+    interrupts = sceKernelCpuSuspendIntr();
+    if (link_sent & (1u << device)) {
+        sceKernelCpuResumeIntr(interrupts);
+        return;
+    }
+    link_sent |= 1u << device;
+    sceKernelCpuResumeIntr(interrupts);
+    role[0] = (u16)device; role[1] = 0;
+    link[0] = (u16)device; link[1] = 1; link[2] = 1; link[3] = 18;
+    link[4] = 18; link[5] = 2; link[6] = 0; link[7] = 0;
+    if (link_command(device, 0x79, role, sizeof(role), 0x17a, 4) < 0) return;
+    link_command(device, 0x24, link, sizeof(link), 0x124, 2);
+}
+
+/* Connections set up before BSMan's event thread reaches native setup (the
+ * worker's link poll finds most cold-boot reconnects first) never pass that
+ * hook. Their settings follow the first decoded report, once connection
+ * handling has finished, from this thread so input never waits on them. */
+static __attribute__((noipa)) void service_link_requests(void)
+{
+    unsigned requested, device;
+    int interrupts = sceKernelCpuSuspendIntr();
+    requested = link_requested;
+    link_requested = 0;
+    sceKernelCpuResumeIntr(interrupts);
+    for (device = 1; device <= 8; ++device)
+        if ((requested & (1u << device)) && installed && !binding && !suspended && !quiescing &&
+            !session_closing(device) && (connection_flags(device) & 2))
+            send_link_settings(device, 0);
+}
+
+static int link_helper(SceSize args, void *argp)
+{
+    (void)args; (void)argp;
+    for (;;) {
+        unsigned timeout = 500000;
+        sceKernelWaitSema(link_sema, 1, &timeout);
+        if (quiescing) break;
+        service_link_requests();
+    }
+    return 0;
+}
+
+static __attribute__((noipa)) void request_link_settings(unsigned device)
+{
+    int interrupts = sceKernelCpuSuspendIntr();
+    int queue = device >= 1 && device <= 8 && link_sema >= 0 && !(link_sent & (1u << device));
+    if (queue) link_requested |= 1u << device;
+    sceKernelCpuResumeIntr(interrupts);
+    if (queue) sceKernelSignalSema(link_sema, 1);
+}
+
 static int schedule_setup(unsigned device, int checked)
 {
     int interrupts;
     if (quiescing) return -1;
     if (!installed || device < 1 || device > 8) return start_hid(device);
+    if (!suspended && !session_closing(device)) send_link_settings(device, 1);
     interrupts = sceKernelCpuSuspendIntr();
     if (!suspended && !session_closing(device)) {
         pending_devices |= 1u << device;
@@ -654,7 +702,9 @@ static int trace_native_identity(unsigned device, void *vendor, void *product, v
         /* This one internal setup call only distinguishes native DS3 IDs.
          * The caller ignores its return and compares these two words. Avoid
          * remote DID discovery entirely for our prepared controller path;
-         * zero means unknown, preventing entry into Sony's DS3-only setup.
+         * zero means unknown, keeping Sony's DS3 branch (and its blocking
+         * module commands) off this worker. schedule_setup sends those link
+         * commands on BSMan's event thread instead, as native DS3 setup does.
          * -1 explicitly means not queried here, not a firmware error result.
          * Public DID APIs and all other devices retain their original calls. */
         *(u16 *)vendor = 0;
@@ -1168,9 +1218,6 @@ static __attribute__((noipa)) void connected(unsigned device, int checked)
     }
     if (!identify(device) || suspended || epoch != power_generation ||
         session != session_epochs[device] || session_closing(device)) return;
-    apply_link_settings(device);
-    if (suspended || epoch != power_generation || session != session_epochs[device] ||
-        session_closing(device)) return;
     if (i < 2) {
         InputSource *source = &sources[i];
         int ready = attach_pending_read(i, device);
@@ -1289,6 +1336,7 @@ static __attribute__((noipa)) void poll_links(void)
         return;
     }
     lost = linked_devices & ~current;
+    link_sent &= ~lost; /* A new connection needs its own link settings. */
     for (device = 1; device <= 8; ++device)
         if (lost & (1u << device)) {
             setup_retry_after[device] = 0;
@@ -1394,7 +1442,10 @@ static __attribute__((noipa)) void consume(const ReceivedPacket *packet)
                 }
             }
             sceKernelCpuResumeIntr(interrupts);
-            if (!source->good) gobt_session_trace(GOBT_TRACE_INPUT, packet->device, generation, packet->source, source->initialized);
+            if (!source->good) {
+                gobt_session_trace(GOBT_TRACE_INPUT, packet->device, generation, packet->source, source->initialized);
+                request_link_settings(packet->device);
+            }
             if (active_source < 0) {
                 int start = gobt_sink_start(0);
                 gobt_log("bt-input native sink start result=%d source=%u\n", start, packet->source);
@@ -1583,6 +1634,17 @@ void gobt_shutdown_input_bridge(int wait)
     /* The worker owns provider calls. Do not terminate it while it holds
      * firmware locks, or race its setup with cleanup on another thread. */
     wake_worker();
+    if (link_sema >= 0) sceKernelSignalSema(link_sema, 1);
+    if (wait && link_thread >= 0) {
+        unsigned link_timeout = 100000;
+        /* Idle, it exits at once. Never kill it inside a module command. */
+        if (sceKernelWaitThreadEnd(link_thread, &link_timeout) >= 0) {
+            sceKernelDeleteThread(link_thread);
+            link_thread = -1;
+            sceKernelDeleteSema(link_sema);
+            link_sema = -1;
+        }
+    }
     if (wait && worker_id >= 0) {
         if (sceKernelWaitThreadEnd(worker_id, &timeout) >= 0) {
             sceKernelDeleteThread(worker_id);
@@ -1627,6 +1689,7 @@ static int worker(SceSize args, void *argp)
                 ++generations[0]; ++generations[1];
                 pending_devices = checked_devices = linked_devices = serviced_devices = 0;
                 prepared_devices = head = tail = queued = 0;
+                link_sent = link_requested = 0;
                 reads_ready[0] = reads_ready[1] = 0;
                 resetting[0] = resetting[1] = 0;
                 /* A surviving manager still owns these contexts and may
@@ -1809,6 +1872,18 @@ int gobt_start_input_bridge(unsigned long firmware)
     bridge_firmware = firmware;
     worker_id = thread;
     worker_started = 1;
+    /* Optional: without it, connections that miss the event-thread hook just
+     * keep the native link settings. Input never depends on this thread. */
+    link_sema = sceKernelCreateSema("PSPGoBTLinkReady", 0, 0, 1, NULL);
+    if (link_sema >= 0) {
+        link_thread = sceKernelCreateThread("PSPGoBTLink", link_helper, 0x30, 0x1000, 0, NULL);
+        if (link_thread < 0 || sceKernelStartThread(link_thread, 0, NULL) < 0) {
+            if (link_thread >= 0) sceKernelDeleteThread(link_thread);
+            link_thread = -1;
+            sceKernelDeleteSema(link_sema);
+            link_sema = -1;
+        }
+    }
     result = sceKernelStartThread(thread, 0, NULL);
     if (result < 0) {
         worker_started = 0;

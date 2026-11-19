@@ -20,12 +20,16 @@
   Bluetooth module link commands (0x79 and 0x24) only to a DS3; supported
   controllers never took that branch. Hardware traces showed their reports
   arriving late and in bursts (up to ~35 ms behind, ~90 ms just after
-  connecting) while the plugin itself added under 1 ms. Every supported
-  controller now receives those same commands, byte for byte, once per
-  connection after identification. Confirmed on a PSP Go with a DualSense.
-- Session-trace builds also record Controller Mapping setup steps and the link
-  command results, and commit the trace file every 5 seconds so records survive
-  holding power.
+  connecting) while the plugin itself added under 1 ms. Every connection now
+  receives both commands once, byte for byte: on BSMan's event thread at the
+  native setup call (where Sony sends them for a DS3) when that hook runs, or
+  otherwise from a separate low-priority thread after the first report, when
+  connection handling has finished. The input worker never sends them: waiting
+  there on BSMan's untimed command semaphore deadlocked some cold-boot
+  reconnects before the first read was posted. Confirmed on a PSP Go with a
+  DualSense.
+- Session-trace builds also record Controller Mapping setup steps and commit
+  the trace file every 5 seconds so records survive holding power.
 - Remove the mapper's shared Bluetooth resource-lookup hook. Build custom rows
   through the native wide-string/vector routines. Make mapping reads use a
   paired-address snapshot without semaphore waits or Bluetooth metadata queries.

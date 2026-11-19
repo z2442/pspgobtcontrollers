@@ -94,7 +94,19 @@ Bluetooth module commands before HID registration: `+0x34f8(device, 0)`
 (command `0x79`) and `+0xab8c(device)` (command `0x24` with
 `1, 1, 18, 18, 2, 0, 0`). Supported controllers never take that branch, since
 their identity is deliberately left unknown to avoid Sony's DS3-only setup.
-The plugin now sends exactly these two requests through the same command
-helper once per connection, after identification and before input starts.
-With them the reconnect lag disappeared on a PSP Go. The commands are Sony's
-vendor protocol; their exact meaning is not documented here.
+Native DS3 setup runs on BSMan's event thread. The plugin moves controller
+setup to its input worker, and still reports unknown IDs there so Sony's DS3
+branch never runs on the worker. Instead, the setup hook on the event thread
+sends both requests, byte for byte, for a controller already listed in
+`controllers.cfg`, then hands setup to the worker. Many cold-boot reconnects
+are found first by the worker's link poll and never reach that hook; for those,
+the first decoded report queues the same requests for a separate
+low-priority thread, after connection handling has finished. Each connection
+receives them once. With them the reconnect lag, and a freeze when opening
+Bluetooth Settings with a controller connected, disappeared on a PSP Go.
+
+Earlier versions sent the requests from the worker. BSMan's command helper
+(`+0x3720`) takes an untimed command semaphore and waits for the module's
+reply, which the event thread delivers; a cold-boot trace showed the worker
+entering HID setup and never returning, so the read was never posted and the
+connected controller produced no input.
