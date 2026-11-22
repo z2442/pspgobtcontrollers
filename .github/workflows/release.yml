@@ -12,7 +12,8 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  # Every push to main publishes a release, so never cancel those runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.ref_type == 'branch' && github.ref_name != github.event.repository.default_branch) }}
 
 jobs:
   build:
@@ -101,7 +102,11 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    # Tags publish `vX.Y`; every push to the default branch publishes
+    # `vX.Y-build.N` so each commit gets its own downloadable release.
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch)
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -122,13 +127,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
         shell: bash
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            release_tag="$GITHUB_REF_NAME"
+            title="PSPGoBT $release_tag"
+            create_args=(--verify-tag)
+            cp release-assets/RELEASE_NOTES.md notes.md
           else
-            gh release create "$RELEASE_TAG" release-assets/* \
-              --verify-tag --title "PSPGoBT $RELEASE_TAG" \
-              --notes-file release-assets/RELEASE_NOTES.md
+            # run_number is stable across re-runs, so a re-run updates the
+            # same release instead of creating a duplicate.
+            release_tag="v$VERSION-build.$GITHUB_RUN_NUMBER"
+            title="PSPGoBT v$VERSION build $GITHUB_RUN_NUMBER (${GITHUB_SHA::7})"
+            create_args=(--target "$GITHUB_SHA")
+            {
+              echo "Automated build of \`${GITHUB_SHA::7}\` on \`$GITHUB_REF_NAME\`."
+              echo
+              echo '```'
+              printf '%s\n' "$HEAD_MESSAGE"
+              echo '```'
+              echo
+              cat release-assets/RELEASE_NOTES.md
+            } > notes.md
+          fi
+
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release upload "$release_tag" release-assets/* --clobber
+          else
+            gh release create "$release_tag" release-assets/* \
+              "${create_args[@]}" --latest --title "$title" \
+              --notes-file notes.md
           fi
