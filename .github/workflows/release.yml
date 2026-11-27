@@ -36,14 +36,25 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Check release version
+      # Tags publish their own vX.Y. Every push to the default branch becomes the
+      # next major release (v2.0, v3.0, ...) after every existing vX.Y tag; that
+      # version is stamped into both PRX modules before they are built.
+      - name: Choose release version
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          version="$(python3 tools/version.py)"
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
             python3 tools/version.py --tag "$GITHUB_REF_NAME"
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" ]]; then
+            next="$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" --jq '.[] | "\(.ref) \(.object.sha)"' \
+              | python3 tools/version.py --next-major --commit "$GITHUB_SHA")"
+            python3 tools/version.py --stamp "$next"
           fi
+          version="$(python3 tools/version.py)"
+          echo "Release version: v$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install toolchain dependencies
@@ -102,8 +113,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    # Tags publish `vX.Y`; every push to the default branch publishes
-    # `vX.Y-build.N` so each commit gets its own downloadable release.
+    # Tags publish `vX.Y`; every push to the default branch publishes the next
+    # major `vX.0`, tagged on that commit.
     if: >-
       github.event_name == 'push' &&
       (github.ref_type == 'tag' || github.ref_name == github.event.repository.default_branch)
@@ -131,19 +142,15 @@ jobs:
           HEAD_MESSAGE: ${{ github.event.head_commit.message }}
         shell: bash
         run: |
+          release_tag="v$VERSION"
+          title="PSPGoBT $release_tag"
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            release_tag="$GITHUB_REF_NAME"
-            title="PSPGoBT $release_tag"
             create_args=(--verify-tag)
             cp release-assets/RELEASE_NOTES.md notes.md
           else
-            # run_number is stable across re-runs, so a re-run updates the
-            # same release instead of creating a duplicate.
-            release_tag="v$VERSION-build.$GITHUB_RUN_NUMBER"
-            title="PSPGoBT v$VERSION build $GITHUB_RUN_NUMBER (${GITHUB_SHA::7})"
             create_args=(--target "$GITHUB_SHA")
             {
-              echo "Automated build of \`${GITHUB_SHA::7}\` on \`$GITHUB_REF_NAME\`."
+              echo "Automated major release of \`${GITHUB_SHA::7}\`."
               echo
               echo '```'
               printf '%s\n' "$HEAD_MESSAGE"

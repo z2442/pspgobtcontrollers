@@ -168,14 +168,21 @@ The [Build and release workflow](.github/workflows/release.yml) tests and builds
 on pushes and pull requests. **Actions → Build and release → Run workflow**
 creates a downloadable build artifact without publishing a release.
 
-After committing and pushing a version update, publish it with a matching tag:
+Every push to `main` publishes a new major release. The workflow picks the next
+major after every existing `vX.Y` tag (v2.0, v3.0, ...), stamps it into both
+PRX modules before building, and tags the commit with it. Re-running a build
+reuses the tag already on that commit. PRX versions are single bytes, so the
+last possible major is v255.0.
+
+To publish a specific version instead, set it in `src/plugin.c` and
+`ui/mapping_ui.c`, commit, and push a matching tag:
 
 ```sh
-git tag -a v1.0 -m "PSPGoBT v1.0"
-git push origin v1.0
+git tag -a v1.1 -m "PSPGoBT v1.1"
+git push origin v1.1
 ```
 
-The workflow rejects tags that do not match the PRX version. Successful tag
+The workflow rejects tags that do not match the PRX version. Successful
 builds publish the installable ZIP, standalone PRX, release notes, and
 `SHA256SUMS` using GitHub's automatic token. It uses a pinned PSP toolchain
 with a SHA-256 check and disables all release diagnostics. Only the publication
